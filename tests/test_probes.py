@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from ehds_hdab import config
+from ehds_hdab import pipeline
 from ehds_hdab.decision import decide
 from ehds_hdab.engine import _selected_observations
 from ehds_hdab.pipeline import process_request
@@ -446,3 +447,214 @@ def test_spe_workspace_creation_is_audited():
     created = next(event for event in events if event["event"] == "spe_workspace_created")
     assert created["request_id"] == request["id"]
     assert created["details"] == {"cohort_size": response["spe"]["cohort_size"]}
+
+
+def test_hospitalised_patients_use_inpatient_primary_diagnosis_and_year():
+    request = {
+        **base,
+        "id": "hospitalised-heart-failure-2025",
+        "purpose": "Public health research on chronic disease burden.",
+        "question": "How many patients were hospitalised for heart failure in 2025, by region?",
+        "definitions": [
+            "Heart failure = ICD-10 code starting with I50.",
+            "Report per region: patients hospitalised for heart failure in 2025.",
+        ],
+    }
+    response = process_request(request)
+
+    inpatient_2025_i50 = e[
+        (e.type == "inpatient")
+        & e.start_date.str.startswith("2025")
+        & e.primary_icd10.str.startswith("I50")
+    ]
+    counts = (
+        inpatient_2025_i50[["patient_id"]]
+        .drop_duplicates()
+        .merge(p[["patient_id", "region"]], on="patient_id")
+        .groupby("region")
+        .size()
+        .to_dict()
+    )
+    regions = pd.read_csv(D / "patients.csv", dtype=str).region.drop_duplicates().tolist()
+    raw_expected = {region: int(counts.get(region, 0)) for region in regions}
+    assert sum(raw_expected.values()) == 103
+    expected = {region: sc(value) for region, value in raw_expected.items()}
+
+    metric = response["query_plan"]["metrics"][0]
+    assert metric["type"] == "count_patients"
+    encounter = next(
+        response["query_plan"]["concepts"][item["concept"]]
+        for item in metric["population"]
+        if response["query_plan"]["concepts"][item["concept"]]["kind"] == "encounter"
+    )
+    assert encounter["types"] == ["inpatient"]
+    assert encounter["primary_icd10_prefixes"] == ["I50"]
+    assert encounter["start_year"] == 2025
+    label = metric["label"]
+    assert {
+        region: response["answer"][region][label]
+        for region in regions
+    } == expected
+
+
+def test_hospitalisations_are_counted_as_2024_inpatient_events_by_hospital():
+    request = {
+        **base,
+        "id": "hospitalisations-heart-failure-2024",
+        "purpose": "Public health research on chronic disease burden.",
+        "question": "How many hospitalisations for heart failure were there in 2024, by hospital?",
+    }
+    response = process_request(request)
+    inpatient_2024_i50 = e[
+        (e.type == "inpatient")
+        & e.start_date.str.startswith("2024")
+        & e.primary_icd10.str.startswith("I50")
+    ]
+    expected = {
+        hospital: sc(count)
+        for hospital, count in inpatient_2024_i50.groupby("data_holder").size().items()
+    }
+    metric = response["query_plan"]["metrics"][0]
+    assert metric["type"] == "count_encounters"
+    assert metric["label"] == "hospitalisations_for_heart_failure"
+    encounter = response["query_plan"]["concepts"][metric["encounter"]]
+    assert encounter["types"] == ["inpatient"]
+    assert encounter["primary_icd10_prefixes"] == ["I50"]
+    assert encounter["start_year"] == 2024
+    assert {
+        hospital: response["answer"][hospital][metric["label"]]
+        for hospital in expected
+    } == expected
+
+
+def test_hospitalisation_date_ranges_are_applied_to_encounter_starts():
+    plan = parse_request({
+        "question": (
+            "How many patients were admitted to hospital for heart failure "
+            "between 2024-01-01 and 2024-06-30?"
+        ),
+    })
+    encounter = next(
+        spec for spec in plan.concepts.values()
+        if spec.get("kind") == "encounter"
+    )
+    assert encounter["types"] == ["inpatient"]
+    assert encounter["primary_icd10_prefixes"] == ["I50"]
+    assert encounter["start_start"] == "2024-01-01"
+    assert encounter["start_end"] == "2024-06-30"
+    assert not plan.warnings
+
+
+def test_emergency_i50_encounters_are_excluded_from_inpatient_patient_counts(monkeypatch):
+    patients = pd.DataFrame(
+        [
+            {
+                "patient_id": f"ip-{index:02d}",
+                "age": 40,
+                "sex": "male",
+                "region": "North",
+                "data_holder": "Hospital A",
+            }
+            for index in range(10)
+        ]
+        + [
+            {
+                "patient_id": f"em-{index:02d}",
+                "age": 40,
+                "sex": "female",
+                "region": "South",
+                "data_holder": "Hospital B",
+            }
+            for index in range(10)
+        ]
+    )
+    encounters = pd.DataFrame(
+        [
+            {
+                "patient_id": f"ip-{index:02d}",
+                "type": "inpatient",
+                "primary_icd10": "I50.9",
+                "start_date": "2025-02-01",
+                "data_holder": "Hospital A",
+            }
+            for index in range(10)
+        ]
+        + [
+            {
+                "patient_id": f"em-{index:02d}",
+                "type": "emergency",
+                "primary_icd10": "I50.9",
+                "start_date": "2025-02-01",
+                "data_holder": "Hospital B",
+            }
+            for index in range(10)
+        ]
+    )
+    encounters["start_date"] = pd.to_datetime(encounters.start_date)
+    synthetic_data = {
+        "patients": patients,
+        "encounters": encounters,
+        "categories": {
+            "region": ["North", "South"],
+            "data_holder": ["Hospital A", "Hospital B"],
+            "sex": ["female", "male"],
+        },
+    }
+    monkeypatch.setattr(pipeline, "load_data", lambda: synthetic_data)
+    request = {
+        **base,
+        "id": "emergency-i50-exclusion",
+        "purpose": "Public health research on chronic disease burden.",
+        "question": "How many patients were hospitalised for heart failure in 2025, by region?",
+        "definitions": [
+            "Heart failure = ICD-10 code starting with I50.",
+            "Report per region: patients hospitalised for heart failure in 2025.",
+        ],
+    }
+    response = process_request(request)
+
+    inpatient = encounters[
+        (encounters.type == "inpatient")
+        & encounters.primary_icd10.str.startswith("I50")
+        & (encounters.start_date.dt.year == 2025)
+    ]
+    raw_expected = (
+        inpatient[["patient_id"]]
+        .drop_duplicates()
+        .merge(patients[["patient_id", "region"]], on="patient_id")
+        .groupby("region")
+        .size()
+        .to_dict()
+    )
+    expected = {
+        region: sc(raw_expected.get(region, 0))
+        for region in synthetic_data["categories"]["region"]
+    }
+    assert len(encounters[encounters.type == "emergency"]) == 10
+    assert expected == {"North": 10, "South": "<10"}
+    metric = response["query_plan"]["metrics"][0]
+    assert {
+        region: response["answer"][region][metric["label"]]
+        for region in synthetic_data["categories"]["region"]
+    } == expected
+
+
+def test_uninterpreted_winter_season_cue_requires_staff_review():
+    response = process_request({
+        **base,
+        "id": "uninterpreted-winter-visit",
+        "purpose": "Public health research on asthma.",
+        "question": "How many patients with asthma were seen during the winter season, by region?",
+        "definitions": [
+            "Report per region: patients with asthma seen during the winter season.",
+        ],
+    })
+    assert response["warnings"]
+    assert response["needs_staff_review"] is True
+
+
+def test_existing_requests_have_no_new_care_setting_or_time_warnings():
+    for path in sorted((ROOT / "requests").glob("R*.json")):
+        request = json.loads(path.read_text(encoding="utf-8"))
+        response = process_request(request)
+        assert response["warnings"] == [], request["id"]

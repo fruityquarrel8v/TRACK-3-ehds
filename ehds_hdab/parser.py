@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 from .config import REFERENCE_DATE
 from .plan import QueryPlan
@@ -13,11 +14,103 @@ _BASE_STARTS = (
     "the", "their", "that", "mean", "average", "median", "%", "percent",
     "share", "proportion", "how many", "number", "count", "adults",
     "patients", "women", "men", "children", "people", "stays",
+    "hospitalisation", "hospitalisations", "hospitalization", "hospitalizations",
+    "admission", "admissions",
+)
+_DATE_TOKEN = (
+    r"(?:\d{4}-\d{2}-\d{2}|\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}|"
+    r"[A-Za-z]+\s+\d{1,2},?\s+\d{4})"
+)
+_HOSPITALISATION_PHRASE = re.compile(
+    r"\b(?P<cue>hospitali[sz](?:ed|ation)s?|"
+    r"admitted(?:\s+to\s+(?:the\s+)?hospital)?|admissions?)"
+    r"(?:\s+in\s+\d{4})?\s+(?:for|with)\s+",
+    re.I,
+)
+_ENCOUNTER_COUNT_CUE = re.compile(
+    r"\b(?:stays|encounters|visits|hospitali[sz]ations?|admissions?)\b",
+    re.I,
+)
+_CARE_SETTING_CUE = re.compile(
+    r"\b(?:hospitali[sz]\w*|admitted|admissions?|emergency|inpatient|"
+    r"outpatient|visits?|stays?)\b",
+    re.I,
+)
+_TIME_RESTRICTION_CUE = re.compile(
+    rf"\bin\s+\d{{4}}\b|\bsince\b|\bduring\b|"
+    rf"\bbetween\s+{_DATE_TOKEN}\s+and\s+{_DATE_TOKEN}\b|"
+    rf"\bfrom\s+{_DATE_TOKEN}\s+to\s+{_DATE_TOKEN}\b",
+    re.I,
 )
 
 
 def _slug(text):
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", normalize(text))).strip("_")
+
+
+def _date_bound(value, end=False):
+    value = re.sub(r"(?<=\d)(?:st|nd|rd|th)\b", "", value.strip(), flags=re.I)
+    if re.fullmatch(r"\d{4}", value):
+        return f"{value}-{'12-31' if end else '01-01'}"
+    for date_format in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(value, date_format).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _encounter_date_filter(text):
+    date_range = re.search(
+        rf"\bbetween\s+({_DATE_TOKEN})\s+and\s+({_DATE_TOKEN})\b|"
+        rf"\bfrom\s+({_DATE_TOKEN})\s+to\s+({_DATE_TOKEN})\b",
+        text,
+        re.I,
+    )
+    if date_range:
+        start, end = (
+            date_range.group(1, 2)
+            if date_range.group(1)
+            else date_range.group(3, 4)
+        )
+        start_bound = _date_bound(start)
+        end_bound = _date_bound(end, end=True)
+        if start_bound and end_bound:
+            return {"start_start": start_bound, "start_end": end_bound}
+    since = re.search(rf"\bsince\s+({_DATE_TOKEN})\b", text, re.I)
+    if since:
+        start_bound = _date_bound(since.group(1))
+        if start_bound:
+            return {"start_start": start_bound}
+    year = re.search(r"\b(?:in|during)\s+(\d{4})\b", text, re.I)
+    if year:
+        return {"start_year": int(year.group(1))}
+    return {}
+
+
+def _cue_context(text, match):
+    context = re.split(r"[,;.!?]", text[match.start():], maxsplit=1)[0]
+    return re.sub(r"\s+", " ", context).strip()
+
+
+def _merge_encounter_population(population, additional, encounter_key, plan):
+    merged = list(population)
+    encounter_codes = plan.concepts.get(encounter_key, {}).get(
+        "primary_icd10_prefixes", []
+    )
+    for item in additional:
+        spec = plan.concepts.get(item.get("concept"), {})
+        if spec.get("kind") == "condition" and not item.get("negate"):
+            condition_codes = spec.get("icd10_prefixes", [])
+            if any(
+                left.startswith(right) or right.startswith(left)
+                for left in condition_codes
+                for right in encounter_codes
+            ):
+                continue
+        if item not in merged:
+            merged.append(item)
+    return merged
 
 
 def _split_definitions(definitions):
@@ -375,6 +468,82 @@ def parse_request(request):
         ("children", "__children__"), ("child", "__children__"),
     ])
     aliases = list(dict.fromkeys((normalize(p), k) for p, k in aliases))
+
+    report_sources = [
+        sentence.split(":", 1)[1].strip()
+        for sentence in definitions
+        if sentence.casefold().startswith("report per ") and ":" in sentence
+    ]
+    encounter_mentions = []
+    condition_aliases = [
+        (phrase, key)
+        for phrase, key in aliases
+        if plan.concepts.get(key, {}).get("kind") == "condition"
+    ]
+    encounter_sources = [("question", question)] + [
+        (f"report_{index}", text)
+        for index, text in enumerate(report_sources)
+    ]
+    for source_name, source in encounter_sources:
+        for cue in _HOSPITALISATION_PHRASE.finditer(source):
+            tail_start = cue.end()
+            tail = source[tail_start:]
+            tail_stop = re.search(
+                r"[,;.!?]|\b(?:in\s+\d{4}|since|during|between|from|by|per)\b",
+                tail,
+                re.I,
+            )
+            tail_end = tail_start + (tail_stop.start() if tail_stop else len(tail))
+            condition_matches = []
+            for phrase, key in condition_aliases:
+                pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+                for match in re.finditer(pattern, source, re.I):
+                    if tail_start <= match.start() and match.end() <= tail_end:
+                        condition_matches.append(
+                            (match.start(), -(match.end() - match.start()), match.end(), key)
+                        )
+            if not condition_matches:
+                continue
+            _, _, condition_end, condition_key = min(condition_matches)
+            prefixes = list(plan.concepts[condition_key].get("icd10_prefixes", []))
+            if not prefixes:
+                continue
+            encounter_spec = {
+                "kind": "encounter",
+                "types": ["inpatient"],
+                "primary_icd10_prefixes": prefixes,
+            }
+            encounter_spec.update(_encounter_date_filter(source))
+            encounter_key = next(
+                (
+                    key
+                    for key, spec in plan.concepts.items()
+                    if spec.get("kind") == "encounter"
+                    and "inpatient" in [value.casefold() for value in spec.get("types", [])]
+                    and spec.get("primary_icd10_prefixes", []) == prefixes
+                ),
+                None,
+            )
+            if encounter_key is None:
+                encounter_key = "__inpatient_" + _slug(condition_key)
+                suffix = 2
+                while encounter_key in plan.concepts:
+                    encounter_key = f"__inpatient_{_slug(condition_key)}_{suffix}"
+                    suffix += 1
+                plan.concepts[encounter_key] = encounter_spec
+            else:
+                plan.concepts[encounter_key].update(
+                    {key: value for key, value in encounter_spec.items() if key not in {"kind", "types", "primary_icd10_prefixes"}}
+                )
+            mention_phrase = source[cue.start():condition_end].strip()
+            aliases.append((mention_phrase, encounter_key))
+            encounter_mentions.append({
+                "concept": encounter_key,
+                "label_phrase": mention_phrase,
+                "event": bool(_ENCOUNTER_COUNT_CUE.search(mention_phrase)),
+                "source": source_name,
+            })
+    aliases = list(dict.fromkeys((normalize(phrase), key) for phrase, key in aliases if phrase))
     question_population = _population(question, plan, aliases)
 
     for sentence in definitions:
@@ -446,7 +615,7 @@ def parse_request(request):
     report_text = " ".join(s.split(":", 1)[1] for s in definitions if s.casefold().startswith("report per ") and ":" in s)
     metric_sentences = [
         s for s in definitions
-        if re.search(r"\bcount stays\b|\bcount (?:encounters|visits)\b", s, re.I)
+        if re.search(r"\bcount (?:stays?|encounters?|visits?|hospitali[sz]ations?|admissions?)\b", s, re.I)
     ]
     formula_metrics = {
         normalize(item["name"]): {
@@ -470,9 +639,7 @@ def parse_request(request):
     for sentence in metric_sentences:
         encounter_key = next((k for k, v in plan.concepts.items() if v.get("kind") == "encounter"), None)
         if encounter_key:
-            start_year = re.search(r"\bin\s+(\d{4})", sentence)
-            if start_year:
-                plan.concepts[encounter_key]["start_year"] = int(start_year.group(1))
+            plan.concepts[encounter_key].update(_encounter_date_filter(sentence))
 
     for phrase in phrases:
         low = phrase.casefold().strip()
@@ -484,14 +651,25 @@ def parse_request(request):
             plan.metrics.append(formula_metric)
             added_formula_metrics.add(formula_metric["id"])
             continue
-        encounter_key = next((k for k, v in plan.concepts.items() if v.get("kind") == "encounter"), None)
-        if encounter_key and re.search(r"\b(stays|encounters|visits)\b", low):
+        phrase_population = _population(phrase, plan, aliases)
+        encounter_key = next(
+            (
+                item["concept"]
+                for item in phrase_population
+                if plan.concepts.get(item["concept"], {}).get("kind") == "encounter"
+            ),
+            None,
+        )
+        if encounter_key and _ENCOUNTER_COUNT_CUE.search(low):
+            population = _merge_encounter_population(
+                phrase_population, question_population, encounter_key, plan
+            )
             plan.metrics.append({
                 "id": label or "encounter_count",
                 "label": label or "encounter_count",
                 "type": "count_encounters",
                 "encounter": encounter_key,
-                "population": [],
+                "population": population,
             })
             continue
         if re.search(r"\b(?:mean|average)\b", low):
@@ -532,7 +710,19 @@ def parse_request(request):
                 if item["concept"] not in {x["concept"] for x in population}:
                     population.append(item)
         else:
-            population = _population(phrase, plan, aliases)
+            population = phrase_population
+        patient_encounter_key = next(
+            (
+                item["concept"]
+                for item in population
+                if plan.concepts.get(item["concept"], {}).get("kind") == "encounter"
+            ),
+            None,
+        )
+        if patient_encounter_key:
+            population = _merge_encounter_population(
+                population, question_population, patient_encounter_key, plan
+            )
         if any(plan.concepts.get(item["concept"], {}).get("kind") == "observation" for item in population):
             for item in question_population:
                 if item["concept"] not in {x["concept"] for x in population}:
@@ -540,7 +730,7 @@ def parse_request(request):
         if "cohort" in low and plan.cohort:
             population = plan.cohort
         if re.search(r"\b(?:number of|patients|adults|women|men|people|children|stays|count|how many)\b", low) or not plan.metrics:
-            if re.search(r"\b(stays|encounters|visits)\b", low) and any(v.get("kind") == "encounter" for v in plan.concepts.values()):
+            if _ENCOUNTER_COUNT_CUE.search(low) and any(v.get("kind") == "encounter" for v in plan.concepts.values()):
                 continue
             if population:
                 metric_id = label or "patient_count"
@@ -558,7 +748,7 @@ def parse_request(request):
             phrase = next(
                 (
                     item for item in phrases
-                    if re.search(r"\b(stays|encounters|visits)\b", item, re.I)
+                    if _ENCOUNTER_COUNT_CUE.search(item)
                 ),
                 None,
             )
@@ -574,7 +764,36 @@ def parse_request(request):
         plan.metrics.append({"id": "cohort_size", "label": "cohort_size", "type": "count_patients", "population": plan.cohort})
     if not plan.metrics and question:
         question_population = _population(question, plan, aliases)
-        if question_population:
+        question_encounter = next(
+            (
+                item["concept"]
+                for item in question_population
+                if plan.concepts.get(item["concept"], {}).get("kind") == "encounter"
+            ),
+            None,
+        )
+        question_event = _ENCOUNTER_COUNT_CUE.search(question)
+        if question_encounter and question_event:
+            mention = next(
+                (
+                    item
+                    for item in encounter_mentions
+                    if item["source"] == "question"
+                    and item["concept"] == question_encounter
+                    and item["event"]
+                ),
+                None,
+            )
+            label = _slug(mention["label_phrase"]) if mention else _slug(question_event.group(0))
+            plan.metrics.append({
+                "id": label or "encounter_count",
+                "label": label or "encounter_count",
+                "type": "count_encounters",
+                "encounter": question_encounter,
+                "population": question_population,
+            })
+            previous_population = question_population
+        elif question_population:
             label = _slug(re.sub(r"\b(?:how many|what is|what are|by .*)\b", "", question, flags=re.I))
             if re.search(r"\b(?:mean|average)\b", question, re.I):
                 observation = next((key for key, spec in plan.concepts.items() if spec.get("kind") == "observation"), None)
@@ -611,11 +830,69 @@ def parse_request(request):
         plan.record_types.append("medications")
     if re.search(r"\bobservations?\b|\bmeasurements?\b|\blab(?:oratory)? values?\b|\b(?:hba1c|bmi|blood pressure) values?\b", text_lower):
         plan.record_types.append("observations")
-    if re.search(r"\bencounters?\b|\bvisits?\b|\bstays?\b", text_lower):
+    if re.search(r"\bencounters?\b|\bvisits?\b|\bstays?\b|\bhospitali[sz]ations?\b|\badmissions?\b", text_lower):
         plan.record_types.append("encounters")
     plan.record_types = list(dict.fromkeys(plan.record_types))
     if not plan.cohort and plan.metrics:
         plan.cohort = plan.metrics[0].get("population", [])
+
+    referenced_concepts = set()
+    for metric in plan.metrics:
+        if metric.get("encounter") in plan.concepts:
+            referenced_concepts.add(metric["encounter"])
+        for field in ("population", "numerator_population", "denominator_population"):
+            for item in metric.get(field, []):
+                if item.get("concept") in plan.concepts:
+                    referenced_concepts.add(item["concept"])
+    for item in plan.cohort:
+        if item.get("concept") in plan.concepts:
+            referenced_concepts.add(item["concept"])
+    referenced_specs = [
+        plan.concepts[key]
+        for key in referenced_concepts
+    ]
+    encounter_specs = [
+        spec for spec in referenced_specs
+        if spec.get("kind") == "encounter"
+    ]
+    temporal_fields = {
+        "start_year", "start_start", "start_end",
+        "onset_year", "onset_start", "onset_end",
+    }
+    time_applied = any(
+        any(spec.get(field) is not None for field in temporal_fields)
+        for spec in referenced_specs
+    )
+    cue_sources = [question, *report_sources]
+    for source in cue_sources:
+        for cue in _CARE_SETTING_CUE.finditer(source):
+            cue_text = cue.group(0).casefold()
+            expected_type = None
+            if (
+                re.fullmatch(r"hospitali[sz]\w*|admitted|admissions?", cue_text)
+                or re.fullmatch(r"hospitali[sz]ations?", cue_text)
+            ):
+                expected_type = "inpatient"
+            elif cue_text == "inpatient":
+                expected_type = "inpatient"
+            elif cue_text == "emergency":
+                expected_type = "emergency"
+            elif cue_text == "outpatient":
+                expected_type = "outpatient"
+            applied = any(
+                not expected_type
+                or expected_type in [kind.casefold() for kind in spec.get("types", [])]
+                for spec in encounter_specs
+            )
+            if not applied:
+                warning = f"Could not apply '{_cue_context(source, cue)}' — staff review required."
+                if warning not in plan.warnings:
+                    plan.warnings.append(warning)
+        for cue in _TIME_RESTRICTION_CUE.finditer(source):
+            if not time_applied:
+                warning = f"Could not apply '{_cue_context(source, cue)}' — staff review required."
+                if warning not in plan.warnings:
+                    plan.warnings.append(warning)
     if not plan.group_by and not plan.metrics:
         plan.warnings.append("No interpretable query or metric was found.")
     return plan
