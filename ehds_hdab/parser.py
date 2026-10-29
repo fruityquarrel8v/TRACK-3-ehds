@@ -88,6 +88,90 @@ def _encounter_date_filter(text):
     return {}
 
 
+def _condition_date_filter(text, start, end):
+    left = max(text.rfind(mark, 0, start) for mark in ".!?;") + 1
+    right_candidates = [
+        position for mark in ".!?;" if (position := text.find(mark, end)) >= 0
+    ]
+    right = min(right_candidates) if right_candidates else len(text)
+    context = text[left:right]
+    mention_start, mention_end = start - left, end - left
+    before = context[max(0, mention_start - 100):mention_start]
+    after = context[mention_end:min(len(context), mention_end + 100)]
+
+    candidates = []
+    date_range = re.search(
+        rf"\bbetween\s+({_DATE_TOKEN})\s+and\s+({_DATE_TOKEN})\b|"
+        rf"\bfrom\s+({_DATE_TOKEN})\s+to\s+({_DATE_TOKEN})\b",
+        context,
+        re.I,
+    )
+    if date_range:
+        values = date_range.group(1, 2) if date_range.group(1) else date_range.group(3, 4)
+        candidates.append(("range", date_range, values))
+    since = re.search(rf"\bsince\s+({_DATE_TOKEN})\b", context, re.I)
+    if since:
+        candidates.append(("since", since, (since.group(1),)))
+    year = re.search(r"\b(?:in|during)\s+(\d{4})\b", context, re.I)
+    if year:
+        candidates.append(("year", year, (year.group(1),)))
+    if not candidates:
+        return {}
+
+    def distance(match):
+        if match.end() < mention_start:
+            return mention_start - match.end()
+        if match.start() > mention_end:
+            return match.start() - mention_end
+        return 0
+
+    kind, date_match, values = min(candidates, key=lambda item: distance(item[1]))
+    if distance(date_match) > 100:
+        return {}
+    between = (
+        context[mention_end:date_match.start()]
+        if date_match.start() >= mention_end
+        else context[date_match.end():mention_start]
+    )
+    if _CARE_SETTING_CUE.search(between):
+        return {}
+
+    diagnosis_before = re.search(
+        r"\b(?:diagnos\w*|new\s+cases?|incident)(?:\s+(?:with|of))?\s*$",
+        before,
+        re.I,
+    )
+    diagnosis_after = re.match(
+        r"\s+(?:(?:was|were|is|are)\s+)?(?:newly\s+)?diagnos\w*\b",
+        after,
+        re.I,
+    )
+    diagnosis_before = diagnosis_before or re.search(
+        r"\bnew\s+diagnos\w*\s+of\s*$",
+        before,
+        re.I,
+    )
+    ordinary_before = re.search(
+        r"\b(?:had|has|have)\s*$|\b(?:with|living\s+with)\s*$",
+        before,
+        re.I,
+    )
+    if diagnosis_before or diagnosis_after:
+        if kind == "range":
+            start_bound, end_bound = _date_bound(values[0]), _date_bound(values[1], end=True)
+            if start_bound and end_bound:
+                return {"onset_start": start_bound, "onset_end": end_bound}
+        if kind == "since":
+            start_bound = _date_bound(values[0])
+            if start_bound:
+                return {"onset_start": start_bound}
+        if kind == "year":
+            return {"onset_year": int(values[0])}
+    elif ordinary_before and kind == "year":
+        return {"onset_end": f"{values[0]}-12-31"}
+    return {}
+
+
 def _cue_context(text, match):
     context = re.split(r"[,;.!?]", text[match.start():], maxsplit=1)[0]
     return re.sub(r"\s+", " ", context).strip()
@@ -516,6 +600,7 @@ def parse_request(request):
         for phrase, key in aliases
         if plan.concepts.get(key, {}).get("kind") == "condition"
     ]
+    hospital_condition_mentions = []
     encounter_sources = [("question", question)] + [
         (f"report_{index}", text)
         for index, text in enumerate(report_sources)
@@ -540,10 +625,13 @@ def parse_request(request):
                         )
             if not condition_matches:
                 continue
-            _, _, condition_end, condition_key = min(condition_matches)
+            condition_start, _, condition_end, condition_key = min(condition_matches)
             prefixes = list(plan.concepts[condition_key].get("icd10_prefixes", []))
             if not prefixes:
                 continue
+            hospital_condition_mentions.append(
+                (source_name, condition_key, condition_start, condition_end)
+            )
             encounter_spec = {
                 "kind": "encounter",
                 "types": ["inpatient"],
@@ -579,6 +667,27 @@ def parse_request(request):
                 "event": bool(_ENCOUNTER_COUNT_CUE.search(mention_phrase)),
                 "source": source_name,
             })
+    matched_condition_mentions = set()
+    for source_name, source in encounter_sources:
+        for phrase, key in condition_aliases:
+            pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+            for match in re.finditer(pattern, source, re.I):
+                mention = (source_name, key, match.start(), match.end())
+                if mention in matched_condition_mentions:
+                    continue
+                matched_condition_mentions.add(mention)
+                if any(
+                    source_name == hospital_source
+                    and key == hospital_key
+                    and match.start() < hospital_end
+                    and match.end() > hospital_start
+                    for hospital_source, hospital_key, hospital_start, hospital_end
+                    in hospital_condition_mentions
+                ):
+                    continue
+                plan.concepts[key].update(
+                    _condition_date_filter(source, match.start(), match.end())
+                )
     aliases = list(dict.fromkeys((normalize(phrase), key) for phrase, key in aliases if phrase))
     question_population = _population(question, plan, aliases)
 
@@ -606,8 +715,18 @@ def parse_request(request):
                     spec["primary_icd10_prefixes"] = codes
         onset_year = re.search(r"\bonset(?:_date)?\b.*?\bin\s+(\d{4})", sentence, re.I)
         onset_range = re.search(r"\bonset(?:_date)?\b.*?\bfrom\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})", sentence, re.I)
-        for spec in plan.concepts.values():
-            if spec.get("kind") == "condition":
+        if onset_year or onset_range:
+            condition_keys = {
+                key
+                for phrase, key in condition_aliases
+                if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", sentence, re.I)
+            }
+            if not condition_keys:
+                condition_keys = {key for _, key in condition_aliases}
+                if len(condition_keys) != 1:
+                    condition_keys = set()
+            for key in condition_keys:
+                spec = plan.concepts[key]
                 if onset_year:
                     spec["onset_year"] = int(onset_year.group(1))
                 if onset_range:

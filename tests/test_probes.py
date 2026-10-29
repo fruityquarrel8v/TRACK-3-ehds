@@ -490,11 +490,159 @@ def test_hospitalised_patients_use_inpatient_primary_diagnosis_and_year():
     assert encounter["types"] == ["inpatient"]
     assert encounter["primary_icd10_prefixes"] == ["I50"]
     assert encounter["start_year"] == 2025
+    condition = next(
+        spec for spec in response["query_plan"]["concepts"].values()
+        if spec.get("kind") == "condition"
+    )
+    assert not any(
+        condition.get(field) is not None
+        for field in ("onset_year", "onset_start", "onset_end")
+    )
     label = metric["label"]
     assert {
         region: response["answer"][region][label]
         for region in regions
     } == expected
+
+
+def _condition_date_counts_by_sex(prefixes, onset_year=None, onset_start=None, onset_end=None):
+    rows = c[c.icd10.str.startswith(tuple(prefixes))].copy()
+    onset = pd.to_datetime(rows.onset_date)
+    if onset_year is not None:
+        rows = rows.loc[onset.dt.year.eq(onset_year)]
+    if onset_start is not None:
+        rows = rows.loc[onset.ge(pd.Timestamp(onset_start))]
+    if onset_end is not None:
+        rows = rows.loc[onset.le(pd.Timestamp(onset_end))]
+    patient_ids = set(rows.patient_id)
+    raw = {
+        sex: int(group.patient_id.isin(patient_ids).sum())
+        for sex, group in p.groupby("sex")
+    }
+    return {sex: sc(count) for sex, count in raw.items()}, sum(raw.values())
+
+
+def _assert_condition_date_response(response, expected):
+    metric = response["query_plan"]["metrics"][0]
+    assert {
+        sex: response["answer"][sex][metric["label"]]
+        for sex in expected
+    } == expected
+    assert not any("Could not apply" in warning for warning in response["warnings"])
+
+
+def test_diagnosed_depression_in_year_uses_onset_year():
+    response = process_request({
+        **base,
+        "id": "depression-diagnosed-in-2025",
+        "purpose": "Public health research on mental health.",
+        "question": "How many patients were diagnosed with depression in 2025, by sex?",
+        "definitions": [
+            "Report per sex: patients diagnosed with depression in 2025.",
+        ],
+    })
+    expected, total = _condition_date_counts_by_sex(("F32",), onset_year=2025)
+    condition = next(
+        spec for spec in response["query_plan"]["concepts"].values()
+        if spec.get("kind") == "condition"
+    )
+
+    assert total == 78
+    assert condition["onset_year"] == 2025
+    _assert_condition_date_response(response, expected)
+
+
+def test_new_depression_cases_in_year_use_onset_year_without_definitions():
+    response = process_request({
+        **base,
+        "id": "depression-new-cases-2025",
+        "purpose": "Public health research on mental health.",
+        "question": "How many new cases of depression were there in 2025, by sex?",
+    })
+    expected, total = _condition_date_counts_by_sex(("F32",), onset_year=2025)
+    condition = next(
+        spec for spec in response["query_plan"]["concepts"].values()
+        if spec.get("kind") == "condition"
+    )
+
+    assert total == 78
+    assert condition["onset_year"] == 2025
+    _assert_condition_date_response(response, expected)
+
+
+def test_having_depression_in_year_uses_onset_end():
+    response = process_request({
+        **base,
+        "id": "depression-by-2025",
+        "purpose": "Public health research on mental health.",
+        "question": "How many patients had depression in 2025, by sex?",
+        "definitions": ["Report per sex: patients with depression in 2025."],
+    })
+    expected, total = _condition_date_counts_by_sex(
+        ("F32",), onset_end="2025-12-31"
+    )
+    condition = next(
+        spec for spec in response["query_plan"]["concepts"].values()
+        if spec.get("kind") == "condition"
+    )
+
+    assert total == 1079
+    assert condition["onset_end"] == "2025-12-31"
+    assert "onset_year" not in condition
+    _assert_condition_date_response(response, expected)
+
+
+def test_diagnosed_asthma_date_range_uses_onset_bounds():
+    response = process_request({
+        **base,
+        "id": "asthma-diagnosed-between-2023-and-2024",
+        "purpose": "Public health research on mental health.",
+        "question": (
+            "How many patients were diagnosed with asthma between 2023 and 2024, "
+            "by sex?"
+        ),
+    })
+    expected, total = _condition_date_counts_by_sex(
+        ("J45",), onset_start="2023-01-01", onset_end="2024-12-31"
+    )
+    condition = next(
+        spec for spec in response["query_plan"]["concepts"].values()
+        if spec.get("kind") == "condition"
+    )
+
+    assert total == 118
+    assert condition["onset_start"] == "2023-01-01"
+    assert condition["onset_end"] == "2024-12-31"
+    _assert_condition_date_response(response, expected)
+
+
+@pytest.mark.parametrize(
+    ("date_phrase", "expected_bounds"),
+    [
+        (
+            "from 2023 to 2024",
+            {"onset_start": "2023-01-01", "onset_end": "2024-12-31"},
+        ),
+        ("since 2023", {"onset_start": "2023-01-01"}),
+    ],
+)
+def test_diagnosed_condition_from_and_since_date_bounds(date_phrase, expected_bounds):
+    plan = parse_request({
+        "question": (
+            "How many patients were diagnosed with asthma "
+            f"{date_phrase}, by sex?"
+        ),
+    })
+    condition = next(
+        spec for spec in plan.concepts.values()
+        if spec.get("kind") == "condition"
+    )
+
+    assert {
+        field: condition[field]
+        for field in expected_bounds
+    } == expected_bounds
+    assert not any("Could not apply" in warning for warning in plan.warnings)
 
 
 def test_hospitalisations_are_counted_as_2024_inpatient_events_by_hospital():
