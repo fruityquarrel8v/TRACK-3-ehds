@@ -32,6 +32,15 @@ DECISION_STYLE = {
     "APPROVE_STATISTICAL": ("success", "Approved: anonymised statistics"),
     "APPROVE_SPE": ("info", "Approved: pseudonymised data in a secure processing environment"),
 }
+PROTOTYPE_DISCLAIMER = (
+    "Prototype: decisions are generated automatically for demonstration and are not legally binding "
+    "decisions of a Health Data Access Body."
+)
+REQUEST_TYPES = {
+    "Statistics only (health data request)": "health data request",
+    "Access to pseudonymised records in a secure processing environment "
+    "(health data access application)": "health data access application",
+}
 
 st.set_page_config(page_title="EHDS Health Data Access Body", layout="wide")
 
@@ -116,61 +125,79 @@ def show_response(resp, staff=False):
 
 def page_applicant():
     st.header("Applicant portal")
-    st.write("Submit a health data request (statistics) or a health data access application (records) "
-             "as JSON. The Health Data Access Body decides automatically and explains why.")
+    st.caption(PROTOTYPE_DISCLAIMER)
+    st.write("Describe your request below. Definitions are optional; the built-in dictionary is used otherwise.")
     examples = example_requests()
-    source = st.radio("Request source", ["Example request", "Upload JSON", "Paste JSON", "Fill in a form"],
-                      horizontal=True)
-    request = None
-    if source == "Example request":
-        rid = st.selectbox("Example", list(examples))
-        request = examples[rid]
-        a = request.get("applicant", {})
-        st.markdown(f"**Applicant:** {a.get('name')}, {a.get('organisation')} ({a.get('country')})  \n"
-                    f"**Requested as:** {request.get('requested_as')}  \n"
-                    f"**Purpose:** {request.get('purpose')}  \n**Question:** {request.get('question')}")
-        with st.expander("Full request JSON"):
-            st.json(request)
-    elif source == "Upload JSON":
-        f = st.file_uploader("Request JSON", type="json")
-        if f:
-            try:
-                request = json.loads(f.read().decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                st.error(f"Invalid JSON file: {e}")
-    elif source == "Paste JSON":
-        txt = st.text_area("Request JSON", height=300)
-        if txt.strip():
-            try:
-                request = json.loads(txt)
-            except json.JSONDecodeError as e:
-                st.error(f"Invalid JSON: {e}")
-    else:
-        with st.form("req_form"):
-            c1, c2, c3 = st.columns(3)
-            name = c1.text_input("Applicant name")
-            org = c2.text_input("Organisation")
-            country = c3.text_input("Country", "AT")
-            requested_as = st.selectbox("Requested as", ["health data request", "health data access application"])
-            purpose = st.text_area("Purpose")
-            question = st.text_area("Question")
-            definitions = st.text_area("Definitions (one per line)", height=150)
-            if st.form_submit_button("Use this request"):
-                st.session_state["form_request"] = {
-                    "id": st.session_state.get("form_id", "NEW-1"),
-                    "applicant": {"name": name, "organisation": org, "country": country},
-                    "requested_as": requested_as,
-                    "requested_format": "anonymised statistics" if requested_as == "health data request"
-                    else "pseudonymised records",
-                    "purpose": purpose, "question": question,
-                    "definitions": [d.strip() for d in definitions.splitlines() if d.strip()],
-                }
-        request = st.session_state.get("form_request")
-    if request and st.button("Submit request", type="primary"):
+    st.subheader("Describe your request")
+    with st.form("applicant_request_form"):
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("Applicant name")
+        org = c2.text_input("Organisation")
+        country = c3.text_input("Country", "AT")
+        request_type = st.selectbox("Type of request", list(REQUEST_TYPES))
+        purpose = st.text_area("Purpose")
+        question = st.text_area("Question")
+        definitions = st.text_area(
+            "Definitions (one per line)",
+            height=150,
+            help="Optional. If omitted, the built-in terminology dictionary is used.",
+        )
+        submit_form = st.form_submit_button("Submit request", type="primary")
+    if submit_form:
+        requested_as = REQUEST_TYPES[request_type]
+        request = {
+            "id": st.session_state.get("form_id", "NEW-1"),
+            "applicant": {"name": name, "organisation": org, "country": country},
+            "requested_as": requested_as,
+            "requested_format": (
+                "anonymised statistics"
+                if requested_as == "health data request"
+                else "pseudonymised records"
+            ),
+            "purpose": purpose,
+            "question": question,
+            "definitions": [d.strip() for d in definitions.splitlines() if d.strip()],
+        }
         with st.spinner("Assessing request..."):
             resp = process_request(request)
         store(resp)
         st.session_state["last"] = resp["request_id"]
+
+    with st.expander("Advanced options", expanded=False):
+        source = st.radio(
+            "Request source",
+            ["Example request", "Upload JSON", "Paste JSON"],
+            horizontal=True,
+        )
+        request = None
+        if source == "Example request":
+            rid = st.selectbox("Example", list(examples))
+            request = examples[rid]
+            a = request.get("applicant", {})
+            st.markdown(f"**Applicant:** {a.get('name')}, {a.get('organisation')} ({a.get('country')})  \n"
+                        f"**Requested as:** {request.get('requested_as')}  \n"
+                        f"**Purpose:** {request.get('purpose')}  \n**Question:** {request.get('question')}")
+            with st.expander("Full request JSON"):
+                st.json(request)
+        elif source == "Upload JSON":
+            f = st.file_uploader("Request JSON", type="json")
+            if f:
+                try:
+                    request = json.loads(f.read().decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    st.error(f"Invalid JSON file: {e}")
+        elif source == "Paste JSON":
+            txt = st.text_area("Request JSON", height=300)
+            if txt.strip():
+                try:
+                    request = json.loads(txt)
+                except json.JSONDecodeError as e:
+                    st.error(f"Invalid JSON: {e}")
+        if request and st.button("Submit this request", type="primary"):
+            with st.spinner("Assessing request..."):
+                resp = process_request(request)
+            store(resp)
+            st.session_state["last"] = resp["request_id"]
     last = st.session_state.get("decisions", {}).get(st.session_state.get("last"))
     if last:
         st.subheader(f"Decision for {last['request_id']}")
@@ -256,4 +283,5 @@ PAGES = {"Applicant portal": page_applicant, "Staff dashboard": page_staff,
          "Secure processing environment": page_spe, "Evaluation": page_evaluation}
 st.sidebar.title("EHDS Health Data Access Body")
 st.sidebar.caption("Simulated HDAB for AIM Hackathon Vienna 2026, Track 3. Synthetic data only.")
+st.sidebar.caption(PROTOTYPE_DISCLAIMER)
 PAGES[st.sidebar.radio("View", list(PAGES))]()
