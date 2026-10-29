@@ -660,6 +660,70 @@ def test_existing_requests_have_no_new_parser_warnings():
         assert response["warnings"] == [], request["id"]
 
 
+@pytest.mark.parametrize(
+    ("request_id", "condition_definition", "concept_name"),
+    [
+        ("pneumonia-dictionary-source-warning", None, "pneumonia"),
+        (
+            "pneumonia-explicit-source-warning",
+            "Pneumonia = ICD-10 code starting with J18.",
+            "Pneumonia",
+        ),
+    ],
+)
+def test_pneumonia_condition_source_warning(
+    request_id, condition_definition, concept_name
+):
+    definitions = [
+        *([condition_definition] if condition_definition else []),
+        "Report per sex: patients with pneumonia.",
+    ]
+    response = process_request({
+        **base,
+        "id": request_id,
+        "purpose": "Public health research on respiratory infections.",
+        "question": "How many patients had pneumonia, by sex?",
+        "definitions": definitions,
+    })
+
+    label = response["query_plan"]["metrics"][0]["label"]
+    assert {
+        sex: response["answer"][sex][label]
+        for sex in ("female", "male")
+    } == {"female": "<10", "male": "<10"}
+    assert response["warnings"] == [
+        f"Condition '{concept_name}' appears only as an encounter main diagnosis "
+        "(primary_icd10), not in the diagnosis list; counted from the diagnosis "
+        "list per the data rules — the request may mean hospital stays. Staff "
+        "review required."
+    ]
+    assert response["needs_staff_review"] is True
+
+
+def test_heart_failure_in_conditions_does_not_get_encounter_source_warning():
+    response = process_request({
+        **base,
+        "id": "heart-failure-condition-source",
+        "purpose": "Public health research on heart failure.",
+        "question": "How many patients had heart failure, by region?",
+        "definitions": ["Report per region: patients with heart failure."],
+    })
+    label = response["query_plan"]["metrics"][0]["label"]
+    heart_failure_ids = set(
+        c.loc[c.icd10.str.startswith("I50"), "patient_id"]
+    )
+    expected = {
+        region: sc(group.patient_id.isin(heart_failure_ids).sum())
+        for region, group in p.groupby("region")
+    }
+
+    assert {
+        region: response["answer"][region][label]
+        for region in expected
+    } == expected
+    assert response["warnings"] == []
+
+
 def _metformin_request(request_id, question_phrase, report_phrase, extra_definitions=()):
     return {
         **base,

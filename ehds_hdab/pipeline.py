@@ -11,6 +11,51 @@ from .privacy import apply_small_cell, check_statistical_output
 from .spe import create_workspace
 
 
+def _condition_source_warnings(plan, data):
+    referenced = set()
+    for metric in plan.metrics:
+        for field in ("population", "numerator_population", "denominator_population"):
+            for item in metric.get(field) or []:
+                key = item.get("concept")
+                if plan.concepts.get(key, {}).get("kind") == "condition":
+                    referenced.add(key)
+    for item in plan.cohort:
+        key = item.get("concept")
+        if plan.concepts.get(key, {}).get("kind") == "condition":
+            referenced.add(key)
+
+    condition_data = data.get("conditions")
+    conditions = (
+        condition_data["icd10"].astype(str)
+        if condition_data is not None and "icd10" in condition_data
+        else None
+    )
+    encounter_data = data.get("encounters")
+    encounter_diagnoses = (
+        encounter_data["primary_icd10"].astype(str)
+        if encounter_data is not None and "primary_icd10" in encounter_data
+        else None
+    )
+    warnings = []
+    for key in sorted(referenced):
+        prefixes = plan.concepts[key].get("icd10_prefixes", [])
+        if not prefixes:
+            continue
+        if conditions is not None and conditions.str.startswith(tuple(prefixes)).any():
+            continue
+        if (
+            encounter_diagnoses is not None
+            and encounter_diagnoses.str.startswith(tuple(prefixes)).any()
+        ):
+            warnings.append(
+                f"Condition '{key}' appears only as an encounter main diagnosis "
+                "(primary_icd10), not in the diagnosis list; counted from the "
+                "diagnosis list per the data rules — the request may mean "
+                "hospital stays. Staff review required."
+            )
+    return warnings
+
+
 def process_request(request):
     started = time.perf_counter()
     decision = decide(request)
@@ -23,6 +68,9 @@ def process_request(request):
         privacy_check = None
     else:
         plan = parse_request(request)
+        for warning in _condition_source_warnings(plan, data):
+            if warning not in plan.warnings:
+                plan.warnings.append(warning)
         warnings = list(plan.warnings)
         if not decision.purpose_category:
             warnings.append("Purpose was not matched to a specific Art. 53 category.")
