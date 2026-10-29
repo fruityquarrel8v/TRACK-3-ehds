@@ -235,6 +235,42 @@ def _population(text, plan, aliases):
     return population
 
 
+def _medication_status(text, aliases, key):
+    terms = sorted(
+        {
+            normalize(phrase)
+            for phrase, alias_key in aliases
+            if alias_key == key and normalize(phrase)
+        },
+        key=len,
+        reverse=True,
+    )
+    for sentence in re.split(r"[.;!?\n]", text):
+        lowered = normalize(sentence)
+        for term in terms:
+            pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
+            for match in re.finditer(pattern, lowered):
+                before = lowered[:match.start()].split()[-10:]
+                after = lowered[match.end():].split()[:10]
+                before_text = " ".join(before)
+                after_text = " ".join(after)
+                if re.search(
+                    r"\b(?:ever\s+(?:been\s+)?prescribed|ever\s+used|"
+                    r"at\s+any\s+time|any\s+prescription\s+of|history\s+of|"
+                    r"previously\s+(?:prescribed|treated)(?:\s+with)?)\b"
+                    r"(?:\s+\w+){0,5}\s*$",
+                    before_text,
+                ) or re.match(
+                    r"\s*(?:at\s+any\s+time|ever\s+(?:been\s+)?"
+                    r"(?:prescribed|used))\b",
+                    after_text,
+                ):
+                    return "ever"
+                if re.search(r"\bactive\b", " ".join(before[-6:] + after[:6])):
+                    return "active"
+    return None
+
+
 def _metric_parts(text):
     text = re.sub(r"\s*,?\s*(?:with\s+)?one\s+decimal\s*\.?\s*$", "", text, flags=re.I)
     starts = "|".join(re.escape(item) for item in _BASE_STARTS if item != "%")
@@ -851,6 +887,22 @@ def parse_request(request):
         plan.concepts[key]
         for key in referenced_concepts
     ]
+    for key in sorted(referenced_concepts):
+        spec = plan.concepts[key]
+        if spec.get("kind") != "medication":
+            continue
+        status = "active" if global_active else _medication_status(all_text, aliases, key)
+        if status == "ever":
+            spec["active_only"] = False
+        else:
+            spec["active_only"] = True
+            if status != "active":
+                warning = (
+                    f"Medication status for '{key}' was not defined; counted as "
+                    "active on 31 December 2025 — staff review required."
+                )
+                if warning not in plan.warnings:
+                    plan.warnings.append(warning)
     encounter_specs = [
         spec for spec in referenced_specs
         if spec.get("kind") == "encounter"

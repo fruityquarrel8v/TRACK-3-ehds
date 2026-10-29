@@ -653,8 +653,104 @@ def test_uninterpreted_winter_season_cue_requires_staff_review():
     assert response["needs_staff_review"] is True
 
 
-def test_existing_requests_have_no_new_care_setting_or_time_warnings():
+def test_existing_requests_have_no_new_parser_warnings():
     for path in sorted((ROOT / "requests").glob("R*.json")):
         request = json.loads(path.read_text(encoding="utf-8"))
         response = process_request(request)
         assert response["warnings"] == [], request["id"]
+
+
+def _metformin_request(request_id, question_phrase, report_phrase, extra_definitions=()):
+    return {
+        **base,
+        "id": request_id,
+        "purpose": "Public health research on diabetes treatment.",
+        "question": (
+            "How many adults with type 2 diabetes "
+            f"{question_phrase}, by region?"
+        ),
+        "definitions": [
+            *extra_definitions,
+            "Report per region: adults with type 2 diabetes "
+            f"{report_phrase}.",
+        ],
+    }
+
+
+def _expected_metformin_counts(active_only):
+    diabetes_ids = set(c.loc[c.icd10.str.startswith("E11"), "patient_id"])
+    adults_with_diabetes = p.loc[
+        p.age.ge(18) & p.patient_id.isin(diabetes_ids)
+    ]
+    prescriptions = m.loc[m.atc.str.startswith("A10BA02")]
+    if active_only:
+        prescriptions = prescriptions.loc[
+            prescriptions.start_date.le("2025-12-31")
+            & (
+                prescriptions.end_date.eq("")
+                | prescriptions.end_date.ge("2025-12-31")
+            )
+        ]
+    medication_ids = set(prescriptions.patient_id)
+    raw_counts = {
+        region: int(group.patient_id.isin(medication_ids).sum())
+        for region, group in adults_with_diabetes.groupby("region")
+    }
+    return {region: sc(count) for region, count in raw_counts.items()}
+
+
+def _assert_metformin_answer(response, expected):
+    label = response["query_plan"]["metrics"][0]["label"]
+    assert {
+        region: response["answer"][region][label]
+        for region in expected
+    } == expected
+
+
+def test_undefined_medication_status_defaults_to_active_with_warning():
+    request = _metformin_request(
+        "metformin-active-default",
+        "take metformin",
+        "who take metformin",
+    )
+    response = process_request(request)
+    expected = _expected_metformin_counts(active_only=True)
+
+    _assert_metformin_answer(response, expected)
+    assert response["warnings"] == [
+        "Medication status for 'metformin' was not defined; counted as active "
+        "on 31 December 2025 — staff review required."
+    ]
+    assert response["needs_staff_review"] is True
+
+
+def test_explicit_ever_prescribed_medication_uses_all_prescriptions():
+    request = _metformin_request(
+        "metformin-ever-prescribed",
+        "have ever been prescribed metformin",
+        "who have ever been prescribed metformin",
+    )
+    response = process_request(request)
+    expected = _expected_metformin_counts(active_only=False)
+
+    _assert_metformin_answer(response, expected)
+    assert response["warnings"] == []
+    assert response["needs_staff_review"] is False
+
+
+def test_explicit_active_definition_uses_active_medication_without_warning():
+    request = _metformin_request(
+        "metformin-active-definition",
+        "take metformin",
+        "who take metformin",
+        [
+            "A medication is active on 31 December 2025 if start_date is on or "
+            "before that day and end_date is empty or on or after that day."
+        ],
+    )
+    response = process_request(request)
+    expected = _expected_metformin_counts(active_only=True)
+
+    _assert_metformin_answer(response, expected)
+    assert response["warnings"] == []
+    assert response["needs_staff_review"] is False
