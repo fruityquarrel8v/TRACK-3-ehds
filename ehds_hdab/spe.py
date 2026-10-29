@@ -79,6 +79,7 @@ def create_workspace(request_id, plan, data, articles=None, created_at=None):
     }
     manifest_path = workspace / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit_event("spe_workspace_created", request_id, {"cohort_size": len(cohort_ids)})
     return SPEInfo(str(workspace), len(cohort_ids), row_counts, str(manifest_path))
 
 

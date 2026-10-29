@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from ehds_hdab import config
 from ehds_hdab.decision import decide
 from ehds_hdab.engine import _selected_observations
 from ehds_hdab.pipeline import process_request
@@ -229,6 +230,44 @@ def test_decision_probes(probe_id, requested_as, purpose, question, expected):
     assert response["decision"] == expected, (probe_id, response["reason"])
 
 
+_LEGITIMATE_ART54_CASES = [
+    "Which patient groups should be prioritised for influenza vaccination to reduce hospitalisations?",
+    "Estimate diabetes prevalence by region; exclude patients under 18 from the analysis.",
+    "Assess whether the burden of COPD differs across regions to plan public health insurance coverage of rehabilitation.",
+    "A bank-funded foundation wants to assess heart failure prevalence for public health planning.",
+    "Study prescribing of SGLT2 inhibitors by physicians since market authorisation to evaluate uptake of guidelines.",
+    "The ministry plans a public-health campaign targeting GPs to improve statin prescribing in line with guidelines.",
+    "A hospital quality report assesses staff performance in clinical documentation.",
+]
+
+
+@pytest.mark.parametrize("text", _LEGITIMATE_ART54_CASES)
+def test_legitimate_public_health_requests_are_not_rejected(text):
+    decision = decide({
+        **base,
+        "purpose": text,
+        "question": text,
+    })
+    assert decision.decision == "APPROVE_STATISTICAL", decision.triggered_rules
+
+
+_PROHIBITED_CREDIT_CASES = [
+    "We will use the data to deny loan applications from people with chronic disease.",
+    "The insurer wants to raise premiums for policyholders with heart failure.",
+]
+
+
+@pytest.mark.parametrize("text", _PROHIBITED_CREDIT_CASES)
+def test_specific_credit_decisions_are_rejected(text):
+    decision = decide({
+        **base,
+        "purpose": text,
+        "question": text,
+    })
+    assert decision.decision == "REJECT"
+    assert decision.articles == ["54"]
+
+
 @pytest.mark.parametrize(
     "word,pick",
     [
@@ -308,6 +347,28 @@ def test_purpose_reason_uses_singular_and_plural_grammar():
     assert "Scientific research and public health are allowed purposes" in plural.reason
 
 
+def test_statistical_reason_branches_end_with_a_period():
+    requests = [
+        {**base, "purpose": "Public health planning.", "question": "Count patients."},
+        {
+            **base,
+            "requested_as": "health data access application",
+            "purpose": "Policy-making.",
+            "question": "Count patients by region.",
+        },
+        {
+            **base,
+            "requested_as": "other",
+            "purpose": "Scientific research.",
+            "question": "Count patients by region.",
+        },
+    ]
+    for request in requests:
+        decision = decide(request)
+        assert decision.decision == "APPROVE_STATISTICAL"
+        assert decision.reason.endswith(".")
+
+
 def test_generic_detrimental_decisions_against_identified_groups_are_rejected():
     decision = decide({
         **base,
@@ -340,3 +401,43 @@ def test_existing_requests_have_a_recognized_purpose_category():
     for path in sorted((ROOT / "requests").glob("R*.json")):
         request = json.loads(path.read_text(encoding="utf-8"))
         assert decide(request).purpose_category, request["id"]
+
+
+def test_rejected_requests_are_final_and_audit_event_has_no_answer():
+    request = {
+        **base,
+        "id": "AUDIT-REJECT",
+        "purpose": _PROHIBITED_CREDIT_CASES[0],
+        "question": _PROHIBITED_CREDIT_CASES[0],
+    }
+    response = process_request(request)
+    assert response["decision"] == "REJECT"
+    assert response["needs_staff_review"] is False
+    events = [
+        json.loads(line)
+        for line in config.AUDIT_LOG.read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[-1]["event"] == "request_processed"
+    assert events[-1]["request_id"] == "AUDIT-REJECT"
+    details = events[-1]["details"]
+    assert set(details) == {
+        "decision",
+        "articles",
+        "purpose_category",
+        "needs_staff_review",
+        "processing_time_s",
+    }
+    assert "answer" not in details
+
+
+def test_spe_workspace_creation_is_audited():
+    request = json.loads((ROOT / "requests" / "R05.json").read_text(encoding="utf-8"))
+    response = process_request(request)
+    assert response["decision"] == "APPROVE_SPE"
+    events = [
+        json.loads(line)
+        for line in config.AUDIT_LOG.read_text(encoding="utf-8").splitlines()
+    ]
+    created = next(event for event in events if event["event"] == "spe_workspace_created")
+    assert created["request_id"] == request["id"]
+    assert created["details"] == {"cohort_size": response["spe"]["cohort_size"]}

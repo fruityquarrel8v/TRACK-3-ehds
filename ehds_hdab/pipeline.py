@@ -1,6 +1,7 @@
 from dataclasses import asdict
 import time
 
+from .audit import audit_event
 from .data import load_data
 from .decision import decide
 from .engine import execute
@@ -42,7 +43,11 @@ def process_request(request):
             if plan.patient_level_listing:
                 warnings.append("Patient-level listings are not provided in statistical answers.")
             spe_info = None
-    return {
+    needs_staff_review = (
+        decision.decision != "REJECT"
+        and bool(warnings or plan.empty or not decision.purpose_category)
+    )
+    response = {
         "request_id": request.get("id"),
         "decision": decision.decision,
         "articles": sorted(decision.articles, key=str),
@@ -52,10 +57,22 @@ def process_request(request):
         "query_plan": plan.to_dict(),
         "spe": spe_info,
         "warnings": warnings,
-        "needs_staff_review": bool(warnings or plan.empty or not decision.purpose_category),
+        "needs_staff_review": needs_staff_review,
         "processing_time_s": time.perf_counter() - started,
         **({"privacy_check": privacy_check} if privacy_check is not None else {}),
     }
+    audit_event(
+        "request_processed",
+        request.get("id"),
+        {
+            "decision": response["decision"],
+            "articles": response["articles"],
+            "purpose_category": response["purpose_category"],
+            "needs_staff_review": response["needs_staff_review"],
+            "processing_time_s": response["processing_time_s"],
+        },
+    )
+    return response
 
 
 def process_file(path):
