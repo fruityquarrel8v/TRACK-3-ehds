@@ -23,6 +23,8 @@ def process_request(request):
     else:
         plan = parse_request(request)
         warnings = list(plan.warnings)
+        if not decision.purpose_category:
+            warnings.append("Purpose was not matched to a specific Art. 53 category.")
         if decision.decision == "APPROVE_SPE":
             spe_info = create_workspace(
                 request.get("id", "unknown"),
@@ -50,7 +52,7 @@ def process_request(request):
         "query_plan": plan.to_dict(),
         "spe": spe_info,
         "warnings": warnings,
-        "needs_staff_review": bool(warnings or plan.empty),
+        "needs_staff_review": bool(warnings or plan.empty or not decision.purpose_category),
         "processing_time_s": time.perf_counter() - started,
         **({"privacy_check": privacy_check} if privacy_check is not None else {}),
     }

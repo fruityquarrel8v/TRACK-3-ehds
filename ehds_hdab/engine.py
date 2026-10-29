@@ -82,16 +82,6 @@ def population_patient_ids(population, plan, data):
     return result
 
 
-def _age_band(age, bands):
-    if pd.isna(age):
-        return None
-    for band in bands:
-        low, high = band.get("lo"), band.get("hi")
-        if (low is None or age >= low) and (high is None or age <= high):
-            return band["label"]
-    return None
-
-
 def _dimension_values(dim, data):
     name = dim["dimension"]
     if name == "age_band":
@@ -100,25 +90,6 @@ def _dimension_values(dim, data):
     if name in ("region", "data_holder", "sex"):
         return data["categories"].get(name, []), None
     return [], None
-
-
-def _path_for_patient(patient, dims):
-    path = []
-    for dim in dims:
-        name = dim["dimension"]
-        if name == "age_band":
-            path.append(_age_band(patient.get("age"), dim.get("bands", [])))
-        else:
-            path.append(patient.get(name))
-    return path
-
-
-def _group_patient_ids(path, dims, data):
-    selected = set()
-    for row in data["patients"].to_dict("records"):
-        if _path_for_patient(row, dims) == list(path):
-            selected.add(row["patient_id"])
-    return selected
 
 
 def _selected_observations(metric, population, plan, data):
@@ -136,8 +107,10 @@ def _selected_observations(metric, population, plan, data):
     frame["_numeric"] = frame["value"].map(_to_decimal)
     if pick in ("max", "min"):
         frame = frame.loc[frame["_numeric"].notna()]
-        ascending = pick == "min"
-        return frame.sort_values(["_numeric", "date"]).drop_duplicates("patient_id", keep="first")
+        return frame.sort_values(
+            ["_numeric", "date"],
+            ascending=[pick == "min", True],
+        ).drop_duplicates("patient_id", keep="first")
     ascending = pick == "earliest"
     return frame.sort_values(["date"], ascending=ascending).drop_duplicates("patient_id", keep="first")
 
@@ -149,74 +122,155 @@ def _to_decimal(value):
         return None
 
 
-def _group_metric_population(population, path, dims, plan, data):
-    selected = population_patient_ids(population, plan, data)
-    patient_group = _group_patient_ids(path, dims, data) if dims else set(data["patients"]["patient_id"])
-    return selected.intersection(patient_group)
+def _population_ids_cached(population, plan, data, all_ids, concept_cache):
+    selected = set(all_ids)
+    for item in population or []:
+        key = item.get("concept")
+        if key not in concept_cache:
+            concept_cache[key] = _concept_patients(key, plan, data)
+        matching = concept_cache[key]
+        selected.intersection_update(all_ids - matching if item.get("negate") else matching)
+    return selected
 
 
-def _path_for_encounter(record, patient, dims):
-    path = []
-    for dim in dims:
-        if dim["dimension"] == "data_holder":
-            path.append(record.data_holder)
-        elif dim["dimension"] == "age_band":
-            path.append(_age_band(patient.get("age"), dim.get("bands", [])))
-        else:
-            path.append(patient.get(dim["dimension"]))
-    return path
+def _group_key(key, dimension_count):
+    if dimension_count == 1:
+        return key if isinstance(key, tuple) else (key,)
+    return tuple(key)
+
+
+def _age_band_series(ages, bands):
+    result = pd.Series(None, index=ages.index, dtype=object)
+    for band in bands:
+        low, high = band.get("lo"), band.get("hi")
+        mask = ages.notna()
+        if low is not None:
+            mask &= ages.ge(low)
+        if high is not None:
+            mask &= ages.le(high)
+        result.loc[mask] = band["label"]
+    return result
 
 
 def execute(plan, data):
     dims = plan.group_by
     choices = [_dimension_values(dim, data)[0] for dim in dims]
     paths = list(product(*choices)) if choices else [("All",)]
+    patients = data["patients"]
+    all_ids = set(patients["patient_id"])
+    concept_cache = {}
+    group_columns = [f"_group_{index}" for index in range(len(dims))]
+    patient_groups = pd.DataFrame({"patient_id": patients["patient_id"]}, index=patients.index)
+    for column, dim in zip(group_columns, dims):
+        if dim["dimension"] == "age_band":
+            patient_groups[column] = _age_band_series(patients["age"], dim.get("bands", []))
+        else:
+            patient_groups[column] = patients[dim["dimension"]].to_numpy()
+
+    group_patient_ids = {}
+    if group_columns:
+        for key, frame in patient_groups.groupby(group_columns, dropna=False, sort=False):
+            group_patient_ids[_group_key(key, len(group_columns))] = set(frame["patient_id"])
+    else:
+        group_patient_ids[("All",)] = all_ids
+
+    encounter_group_columns = []
+    encounter_groups = None
+    if dims:
+        encounters = data["encounters"]
+        encounter_groups = encounters[["patient_id", "data_holder"]].copy()
+        encounter_groups["_encounter_index"] = encounters.index
+        encounter_groups = encounter_groups.merge(patient_groups, on="patient_id", how="left", sort=False)
+        for index, dim in enumerate(dims):
+            name = f"_encounter_group_{index}"
+            encounter_group_columns.append(name)
+            if dim["dimension"] == "data_holder":
+                encounter_groups[name] = encounter_groups["data_holder"]
+            else:
+                encounter_groups[name] = encounter_groups[group_columns[index]]
+
+    mean_group_values = {}
+    for metric in plan.metrics:
+        if metric.get("type") != "mean":
+            continue
+        selected_ids = _population_ids_cached(
+            metric.get("population", []), plan, data, all_ids, concept_cache
+        )
+        observations = _selected_observations(metric, selected_ids, plan, data)
+        observations = observations.loc[observations["_numeric"].notna()]
+        if not group_columns:
+            values = observations["_numeric"].tolist()
+            mean_group_values[metric["id"]] = {
+                ("All",): (
+                    sum(values, Decimal(0)) / Decimal(len(values)) if values else None,
+                    len(values),
+                )
+            }
+            continue
+        grouped = observations[["patient_id", "_numeric"]].merge(
+            patient_groups, on="patient_id", how="left", sort=False
+        )
+        values = {}
+        for key, frame in grouped.groupby(group_columns, dropna=False, sort=False):
+            decimals = frame["_numeric"].tolist()
+            values[_group_key(key, len(group_columns))] = (
+                sum(decimals, Decimal(0)) / Decimal(len(decimals)) if decimals else None,
+                len(decimals),
+            )
+        mean_group_values[metric["id"]] = values
+
+    encounter_group_values = {}
+    for metric in plan.metrics:
+        if metric.get("type") != "count_encounters":
+            continue
+        spec = plan.concepts.get(metric.get("encounter"), {})
+        records = _encounters_for(spec, data)
+        allowed_ids = _population_ids_cached(
+            metric.get("population", []), plan, data, all_ids, concept_cache
+        )
+        records = records.loc[records["patient_id"].isin(allowed_ids)]
+        if encounter_groups is not None:
+            selected = encounter_groups.loc[
+                encounter_groups["_encounter_index"].isin(records.index)
+                & encounter_groups["patient_id"].isin(allowed_ids)
+            ]
+            counts = selected.groupby(
+                encounter_group_columns, dropna=False, sort=False
+            ).size()
+            encounter_group_values[metric["id"]] = {
+                _group_key(group_key, len(encounter_group_columns)): int(count)
+                for group_key, count in counts.items()
+            }
+        else:
+            encounter_group_values[metric["id"]] = {("All",): len(records)}
+
     groups = []
-    patient_lookup = data["patients"].set_index("patient_id", drop=False)
     for path in paths:
         metrics = {}
-        group_ids = _group_patient_ids(path, dims, data) if dims else set(data["patients"]["patient_id"])
+        group_ids = group_patient_ids.get(tuple(path), set())
         for metric in plan.metrics:
             kind = metric.get("type")
             if kind == "count_patients":
-                ids = population_patient_ids(metric.get("population", []), plan, data).intersection(group_ids)
+                ids = _population_ids_cached(
+                    metric.get("population", []), plan, data, all_ids, concept_cache
+                ).intersection(group_ids)
                 value = len(ids)
                 metrics[metric["id"]] = {"type": kind, "value": value, "n": value}
             elif kind == "count_encounters":
-                key = metric.get("encounter")
-                spec = plan.concepts.get(key, {})
-                records = _encounters_for(spec, data)
-                allowed_ids = population_patient_ids(metric.get("population", []), plan, data)
-                records = records.loc[records["patient_id"].isin(allowed_ids)]
-                if not records.empty and dims:
-                    patient_attrs = data["patients"].set_index("patient_id")
-                    keep = []
-                    for row in records.itertuples():
-                        patient = patient_attrs.loc[row.patient_id].to_dict() if row.patient_id in patient_attrs.index else {}
-                        if _path_for_encounter(row, patient, dims) == list(path):
-                            keep.append(row.Index)
-                    records = records.loc[keep]
-                value = len(records)
+                value = encounter_group_values.get(metric["id"], {}).get(tuple(path), 0)
                 metrics[metric["id"]] = {"type": kind, "value": value, "n": value}
             elif kind == "percentage":
-                numerator = _group_metric_population(metric.get("numerator_population", []), path, dims, plan, data)
-                denominator = _group_metric_population(metric.get("denominator_population", []), path, dims, plan, data)
+                numerator = _population_ids_cached(
+                    metric.get("numerator_population", []), plan, data, all_ids, concept_cache
+                ).intersection(group_ids)
+                denominator = _population_ids_cached(
+                    metric.get("denominator_population", []), plan, data, all_ids, concept_cache
+                ).intersection(group_ids)
                 n, d = len(numerator), len(denominator)
                 value = Decimal(n) * Decimal(100) / Decimal(d) if d else None
                 metrics[metric["id"]] = {"type": kind, "value": value, "numerator": n, "denominator": d}
             elif kind == "mean":
-                population = _group_metric_population(metric.get("population", []), path, dims, plan, data)
-                observations = _selected_observations(metric, population, plan, data)
-                if not observations.empty and dims:
-                    ids = set()
-                    for patient_id in observations["patient_id"]:
-                        patient = patient_lookup.loc[patient_id].to_dict()
-                        if _path_for_patient(patient, dims) == list(path):
-                            ids.add(patient_id)
-                    observations = observations.loc[observations["patient_id"].isin(ids)]
-                values = [v for v in observations["_numeric"].tolist() if v is not None]
-                count = len(values)
-                value = sum(values, Decimal(0)) / Decimal(count) if count else None
+                value, count = mean_group_values.get(metric["id"], {}).get(tuple(path), (None, 0))
                 metrics[metric["id"]] = {"type": kind, "value": value, "n": count}
         groups.append({"path": list(path), "values": metrics})
     return {

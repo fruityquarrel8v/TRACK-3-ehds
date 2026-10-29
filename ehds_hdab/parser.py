@@ -143,8 +143,49 @@ def _population(text, plan, aliases):
 
 
 def _metric_parts(text):
-    parts = re.split(r",\s+| and (?=(?:" + "|".join(re.escape(x) for x in _BASE_STARTS) + r")\b)", text, flags=re.I)
-    return [part.strip(" .") for part in parts if part.strip(" .")]
+    text = re.sub(r"\s*,?\s*(?:with\s+)?one\s+decimal\s*\.?\s*$", "", text, flags=re.I)
+    starts = "|".join(re.escape(item) for item in _BASE_STARTS if item != "%")
+    parts = re.split(
+        r",\s+|\s+and\s+(?=%|(?:" + starts + r")\b)",
+        text,
+        flags=re.I,
+    )
+    cleaned = []
+    for part in parts:
+        part = re.sub(r"\s*,?\s*(?:with\s+)?one\s+decimal\s*\.?\s*$", "", part, flags=re.I)
+        part = part.strip(" .")
+        if part:
+            cleaned.append(part)
+    return cleaned
+
+
+def _ratio_definition(sentence):
+    match = re.match(r"^\s*([^=]+?)\s*=\s*(.+?)\s*$", sentence)
+    if not match:
+        return None
+    ratio = re.fullmatch(
+        r"(?P<numerator>.+?)\s*/\s*(?P<denominator>.+?)\s*"
+        r"(?:[×x*]\s*100|times\s+100|per\s+100)"
+        r"(?:\s*,?\s*(?:with\s+)?one\s+decimal)?\s*\.?",
+        match.group(2),
+        re.I,
+    )
+    if not ratio:
+        return None
+    return {
+        "name": match.group(1).strip(),
+        "numerator": ratio.group("numerator").strip(),
+        "denominator": ratio.group("denominator").strip(),
+    }
+
+
+def _formula_metric_for_phrase(phrase, formulas):
+    normalized = normalize(phrase)
+    normalized = re.sub(r"^(?:the|a|an)\s+", "", normalized)
+    for name, metric in formulas.items():
+        if normalized == name:
+            return metric
+    return None
 
 
 def _sentence_scope(sentences):
@@ -158,11 +199,19 @@ def parse_request(request):
     all_text = " ".join([question, *definitions])
     definition_names = {}
     age_bands = []
+    parsed_ratios = [
+        (sentence, _ratio_definition(sentence))
+        for sentence in definitions
+    ]
+    ratio_definitions = [parsed for _, parsed in parsed_ratios if parsed is not None]
+    ratio_sentences = {sentence for sentence, parsed in parsed_ratios if parsed is not None}
     global_active = bool(re.search(r"\bmedication is active\b|\bactive (?:medication|prescription|.*?\bATC)\b", all_text, re.I))
 
     for sentence in definitions:
         if "age band" in sentence.casefold():
             age_bands = _parse_bands(sentence)
+        if sentence in ratio_sentences:
+            continue
         match = re.match(r"^\s*([^=]+?)\s*=\s*(.+)$", sentence)
         if not match:
             continue
@@ -271,11 +320,42 @@ def parse_request(request):
             aliases.append((alias, key))
     aliases = list(dict.fromkeys((normalize(phrase), key) for phrase, key in aliases if phrase))
 
+    pick_patterns = {
+        "highest": "max",
+        "maximum": "max",
+        "max": "max",
+        "lowest": "min",
+        "minimum": "min",
+        "min": "min",
+        "first": "earliest",
+        "earliest": "earliest",
+        "last": "latest",
+        "latest": "latest",
+        "most recent": "latest",
+    }
     for name, spec in list(plan.concepts.items()):
         if spec.get("kind") == "observation":
-            pick = re.search(rf"(?i)\b(latest|earliest|max(?:imum)?|min(?:imum)?)\b[^.]*{re.escape(name)}", all_text)
-            if pick:
-                spec["pick"] = {"max": "max", "maximum": "max", "min": "min", "minimum": "min"}.get(pick.group(1).casefold(), pick.group(1).casefold())
+            terms = [phrase for phrase, key in aliases if key == name]
+            for term in sorted(terms, key=len, reverse=True):
+                concept_pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
+                pick_names = "|".join(
+                    re.escape(value)
+                    for value in sorted(pick_patterns, key=len, reverse=True)
+                )
+                pick = re.search(
+                    rf"\b({pick_names})\b[^.;]*{concept_pattern}",
+                    all_text,
+                    re.I,
+                )
+                if not pick:
+                    pick = re.search(
+                        rf"{concept_pattern}[^.;]*\b({pick_names})\b",
+                        all_text,
+                        re.I,
+                    )
+                if pick:
+                    spec["pick"] = pick_patterns[pick.group(1).casefold()]
+                    break
 
     for key, kind in (
         ("__adults__", "age"),
@@ -368,44 +448,51 @@ def parse_request(request):
         s for s in definitions
         if re.search(r"\bcount stays\b|\bcount (?:encounters|visits)\b", s, re.I)
     ]
+    formula_metrics = {
+        normalize(item["name"]): {
+            "id": _slug(item["name"]),
+            "label": _slug(item["name"]),
+            "type": "percentage",
+            "numerator_population": _population(item["numerator"], plan, aliases),
+            "denominator_population": _population(item["denominator"], plan, aliases),
+        }
+        for item in ratio_definitions
+    }
+    added_formula_metrics = set()
     previous_population = []
     main_population = []
-    count_metrics = []
     if plan.cohort:
         previous_population = plan.cohort
     if report_text:
         phrases = _metric_parts(report_text)
     else:
         phrases = []
-    # Formula definitions are parsed as explicit percentage metrics.
-    formula = next((s for s in definitions if re.search(r"\bprevalence\s*=", s, re.I)), None)
-    if formula:
-        parts = re.split(r"[/×x]", formula.split("=", 1)[1])
-        if len(parts) >= 2:
-            numerator = _population(parts[0], plan, aliases)
-            denominator = _population(parts[1], plan, aliases)
-            plan.metrics.append({
-                "id": "prevalence_pct", "label": "prevalence_pct", "type": "percentage",
-                "numerator_population": numerator, "denominator_population": denominator,
-            })
-
     for sentence in metric_sentences:
         encounter_key = next((k for k, v in plan.concepts.items() if v.get("kind") == "encounter"), None)
         if encounter_key:
             start_year = re.search(r"\bin\s+(\d{4})", sentence)
             if start_year:
                 plan.concepts[encounter_key]["start_year"] = int(start_year.group(1))
-            plan.metrics.append({
-                "id": "encounter_count", "label": "inpatient_stays", "type": "count_encounters",
-                "encounter": encounter_key, "population": [],
-            })
 
     for phrase in phrases:
         low = phrase.casefold().strip()
         if not low:
             continue
         label = _slug(phrase)
-        if "prevalence" in low and formula:
+        formula_metric = _formula_metric_for_phrase(phrase, formula_metrics)
+        if formula_metric:
+            plan.metrics.append(formula_metric)
+            added_formula_metrics.add(formula_metric["id"])
+            continue
+        encounter_key = next((k for k, v in plan.concepts.items() if v.get("kind") == "encounter"), None)
+        if encounter_key and re.search(r"\b(stays|encounters|visits)\b", low):
+            plan.metrics.append({
+                "id": label or "encounter_count",
+                "label": label or "encounter_count",
+                "type": "count_encounters",
+                "encounter": encounter_key,
+                "population": [],
+            })
             continue
         if re.search(r"\b(?:mean|average)\b", low):
             observation = next((k for p, k in sorted(aliases, key=lambda x: len(x[0]), reverse=True)
@@ -417,7 +504,7 @@ def parse_request(request):
                     "type": "mean", "observation": observation, "population": population,
                 })
                 continue
-        percentage = bool(re.search(r"%|percent|share|proportion|prevalence", low))
+        percentage = bool(re.search(r"%|percent|share|proportion", low))
         if percentage:
             med = _population(phrase, plan, aliases)
             if med:
@@ -437,9 +524,6 @@ def parse_request(request):
                     "type": "percentage", "numerator_population": previous_population,
                     "denominator_population": main_population or plan.cohort,
                 })
-            elif formula:
-                # The formula metric already carries the fully defined populations.
-                continue
             continue
         # "how many of them" carries the previous count population forward.
         if re.search(r"how many of them|their\b", low) and previous_population:
@@ -465,10 +549,27 @@ def parse_request(request):
                 previous_population = population
                 if not re.search(r"how many of them|their\b", low):
                     main_population = population
-                count_metrics.append(metric)
-    if formula and not any(m["type"] == "percentage" and "prevalence" in m["id"] for m in plan.metrics):
-        metric = next(m for m in plan.metrics if m["type"] == "percentage" and m["id"] == "prevalence_pct")
-        plan.metrics.append(metric)
+    for name, metric in formula_metrics.items():
+        if metric["id"] not in added_formula_metrics:
+            plan.metrics.append(metric)
+    if metric_sentences and not any(metric["type"] == "count_encounters" for metric in plan.metrics):
+        encounter_key = next((k for k, v in plan.concepts.items() if v.get("kind") == "encounter"), None)
+        if encounter_key:
+            phrase = next(
+                (
+                    item for item in phrases
+                    if re.search(r"\b(stays|encounters|visits)\b", item, re.I)
+                ),
+                None,
+            )
+            label = _slug(phrase) if phrase else "encounter_count"
+            plan.metrics.append({
+                "id": label or "encounter_count",
+                "label": label or "encounter_count",
+                "type": "count_encounters",
+                "encounter": encounter_key,
+                "population": [],
+            })
     if not plan.metrics and plan.cohort:
         plan.metrics.append({"id": "cohort_size", "label": "cohort_size", "type": "count_patients", "population": plan.cohort})
     if not plan.metrics and question:

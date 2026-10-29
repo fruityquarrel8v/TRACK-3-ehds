@@ -20,17 +20,90 @@ def _prohibited(request):
     ).casefold()
     org = str((request.get("applicant") or {}).get("organisation", "") or "").casefold()
     text = purpose_question
-    if re.search(r"\b(?:insurance|insurer|credit|loan)\b", text) and re.search(
-        r"\b(?:premium|pricing|underwrit|risk score|exclude|exclusion|eligibility)\w*\b", text
-    ):
+    credit_context = re.search(
+        r"\b(?:insurance|insurer|credit|loan|bank|lender|lending)\b", text
+    )
+    credit_decision = re.search(
+        r"\b(?:premiums?|pricing|underwrit\w*|risk score|scor(?:e|ing)|decid\w*|"
+        r"exclude|exclusions?|eligibility|applicants?|assess\w*)\b",
+        text,
+    )
+    if credit_context and credit_decision:
         return "insurance_credit"
-    if re.search(r"\b(?:advertising campaign|marketing campaign|sales campaign|marketing to|advertising to|promot(?:e|ing|ion))\b", text):
+    audience = re.search(
+        r"\b(?:prescrib\w*|gps?\b|physician\w*|doctors?\b|consumers?\b|customers?\b)\b",
+        text,
+    )
+    sales_representatives = re.search(
+        r"\bsales\s+(?:representatives?|reps?)\b", text
+    )
+    marketing_action = re.search(
+        r"\b(?:advertis\w*|market\w*|sales|sell|target\w*|promot\w*)\b",
+        text,
+    )
+    campaign = re.search(
+        r"\b(?:advertising|marketing|sales)\s+campaign\b", text
+    )
+    product_promotion = re.search(
+        r"\bpromot\w*\b.{0,40}\b(?:products?|medicines?|drugs?|brands?)\b",
+        text,
+    )
+    if product_promotion or (
+        audience
+        and marketing_action
+        and (sales_representatives or campaign or re.search(r"\b(?:sales|market\w*|advertis\w*)\b", text))
+    ):
         return "advertising_marketing"
-    employment_context = bool(re.search(r"\b(?:employee|employees|employer|hr|hiring|employment|staff)\b", text))
-    employment_decision = bool(re.search(r"\b(?:renew|terminate|hire|recruit|contract|sick leave|absence|performance)\w*\b", text))
-    list_matching = bool(re.search(r"\bmatch\w*\b", text) and re.search(r"\b(?:employee|staff|personnel)\s+list\b", text))
-    if employment_context and (employment_decision or list_matching):
+    if audience and campaign:
+        return "advertising_marketing"
+    if re.search(
+        r"\b(?:employee|employees|employer|hr|hiring|employment|staff|workforce|"
+        r"job applicant|job applicants)\b",
+        text,
+    ):
+        employment_context = True
+    else:
+        employment_context = False
+    employment_decision = bool(
+        re.search(
+            r"\b(?:promot\w*|dismiss\w*|fire\w*|terminat\w*|hire|recruit\w*|"
+            r"contract\w*|salary|salaries|career|renew\w*|sick leave|absence|"
+            r"performance|disciplin\w*)\b",
+            text,
+        )
+    )
+    list_matching = bool(
+        re.search(r"\bmatch\w*\b", text)
+        and re.search(r"\b(?:employee|staff|personnel)\s+list\b", text)
+    )
+    identifies_worker = bool(
+        re.search(
+            r"\b(?:which|identify|know)\b.{0,60}\b(?:its|our|the)?\s*"
+            r"(?:staff|employees?|workforce|job applicants?)\b",
+            text,
+        )
+    )
+    if employment_context and (employment_decision or list_matching or identifies_worker):
         return "employment"
+    detrimental_decision = re.search(
+        r"\b(?:detrimental|adverse|harmful|negative|unfavourable)\s+"
+        r"(?:decisions?|actions?|treatment|outcomes?)\b|"
+        r"\badversely?\s+(?:affect|impact|treat)\w*\b|"
+        r"\b(?:decid\w*|decision)\b[^.;]{0,80}\b"
+        r"(?:detrimental|adverse|harmful|negative|unfavourable)\b",
+        text,
+    )
+    identified_targets = re.search(
+        r"\b(?:identified\s+)?(?:individuals?|persons?|people|patients|groups?)\b",
+        text,
+    )
+    individual_decision = re.search(
+        r"\b(?:exclude|deny|penalis\w*|"
+        r"prioritis\w*|prioritiz\w*)\b",
+        text,
+    )
+    if identified_targets and (detrimental_decision or individual_decision):
+        return "detrimental_individual_decisions"
     if re.search(r"\b(?:re-identif|reidentif|identify people|identify individuals|match records)\w*\b", text):
         return "reidentification"
     harmful = re.search(r"\b(?:tobacco|nicotine|alcohol|illicit drugs?|weapons?|gambling)\b", text)
@@ -55,12 +128,64 @@ def _purpose_categories(request):
         (r"\bpolicy|guideline|quality programme|quality program\b", "policy-making"),
         (r"\bofficial statistics|annual health report\b", "official statistics"),
         (r"\bteach|teaching|education|training module\b", "education/teaching"),
-        (r"\btrain|validat|prediction model|algorithm\b", "training/testing algorithms"),
+        (
+            r"\b(?:train\w*|develop\w*|validat\w*|test\w*|build\w*)\b"
+            r"[^.;]{0,80}\b(?:machine learning|models?|algorithms?|a\.?i\.?|"
+            r"classifiers?|prediction)\b|"
+            r"\b(?:machine learning|models?|algorithms?|a\.?i\.?|classifiers?|"
+            r"prediction)\b[^.;]{0,80}\b"
+            r"(?:train\w*|develop\w*|validat\w*|test\w*|build\w*)\b",
+            "training/testing algorithms",
+        ),
         (r"\bimprov\w* care|earlier intervention|quality programme|quality program\b", "improving care"),
     ):
         if re.search(pattern, text) and label not in categories:
             categories.append(label)
-    return categories or ["public health"]
+    return categories
+
+
+def _purpose_statement(categories):
+    if not categories:
+        return (
+            "No prohibited purpose was found, and the purpose was not matched to a "
+            "specific Art. 53 category; staff review is required."
+        )
+    joined = " and ".join(categories)
+    if len(categories) == 1:
+        return f"{joined.capitalize()} is an allowed purpose (Art. 53)."
+    return f"{joined.capitalize()} are allowed purposes (Art. 53)."
+
+
+def _records_justified(text):
+    inadequacy = (
+        r"(?:not enough|insufficient|inadequate|not sufficient|"
+        r"cannot answer|cannot address|can't answer|can't address)"
+    )
+    aggregate_terms = r"(?:aggregates?|statistics?|statistical data|anonymi[sz]ed data)"
+    if re.search(
+        rf"\b{aggregate_terms}\b[^.;]{{0,80}}\b{inadequacy}\b|"
+        rf"\b{inadequacy}\b[^.;]{{0,80}}\b{aggregate_terms}\b",
+        text,
+    ):
+        return True
+
+    action = r"(?:train\w*|develop\w*|validat\w*|test\w*|build\w*)"
+    model = r"(?:machine\s+learning|models?|algorithms?|a\.?i\.?|classifiers?|prediction(?:\s+models?)?)"
+    if re.search(rf"\b{action}\b(?:\W+\w+){{0,6}}\W+{model}\b", text) or re.search(
+        rf"\b{model}\b(?:\W+\w+){{0,6}}\W+{action}\b", text
+    ):
+        return True
+
+    level = r"(?:individual|patient|record)[ -]level"
+    records = r"(?:data|records?|histories|history|information)"
+    need = r"(?:need\w*|requir\w*|necessary|essential)"
+    return bool(
+        re.search(rf"\b{need}\b(?:\W+\w+){{0,4}}\W+{level}\b(?:\s+{records})?", text)
+        or re.search(
+            rf"\b{level}\b(?:\s+{records})?(?:\W+\w+){{0,5}}\W+\b{need}\b",
+            text,
+        )
+    )
 
 
 def decide(request):
@@ -69,6 +194,7 @@ def decide(request):
         "insurance_credit": "Using health data to set insurance premiums or credit decisions is prohibited (Art. 54).",
         "advertising_marketing": "Using health data for advertising or marketing is prohibited (Art. 54).",
         "employment": "Using health data for decisions about employees is prohibited (Art. 54). Matching it with an employee list would also re-identify people.",
+        "detrimental_individual_decisions": "Using health data for decisions that may adversely affect identified individuals or groups is prohibited (Art. 54).",
         "harmful_products": "Developing or marketing harmful products is prohibited (Art. 54).",
         "reidentification": "Using health data to re-identify individuals is prohibited (Art. 54).",
     }
@@ -76,39 +202,37 @@ def decide(request):
         return Decision("REJECT", ["54"], reason_text[prohibited], "prohibited purpose", [prohibited])
     requested_as = str(request.get("requested_as", "")).strip().casefold()
     categories = _purpose_categories(request)
+    purpose_statement = _purpose_statement(categories)
     category_text = " and ".join(categories)
     if requested_as == "health data request":
         return Decision(
             "APPROVE_STATISTICAL",
             ["53", "69"],
-            f"{category_text.capitalize()} are allowed purposes (Art. 53). Statistics answer the question (Art. 69).",
+            f"{purpose_statement} Statistics answer the question (Art. 69)",
             category_text,
             ["statistical_request"],
         )
     if requested_as == "health data access application":
         text = " ".join(str(request.get(k, "") or "") for k in ("purpose", "question", "requested_format")).casefold()
-        justifies_records = bool(
-            re.search(r"aggregates? (?:are )?not enough|statistics? (?:are )?not enough|individual[- ]level|patient[- ]level|train\w*|validat\w*|prediction model|algorithm", text)
-        )
-        if justifies_records:
+        if _records_justified(text):
             return Decision(
                 "APPROVE_SPE",
                 ["53", "66", "68", "73"],
-                f"{category_text.capitalize()} is an allowed purpose (Art. 53). The model or analysis needs patient-level data, so pseudonymised data is justified (Art. 66). Access only under a data permit inside a secure processing environment (Art. 68, 73).",
+                f"{purpose_statement} The model or analysis needs patient-level data, so pseudonymised data is justified (Art. 66). Access only under a data permit inside a secure processing environment (Art. 68, 73).",
                 category_text,
                 ["individual_level_justification"],
             )
         return Decision(
             "APPROVE_STATISTICAL",
             ["53", "66", "69"],
-            f"{category_text.capitalize()} is an allowed purpose (Art. 53). Pseudonymised records are not justified because statistics answer the question (Art. 66, 69).",
+            f"{purpose_statement} Pseudonymised records are not justified because statistics answer the question (Art. 66, 69)",
             category_text,
             ["statistics_sufficient"],
         )
     return Decision(
         "APPROVE_STATISTICAL",
         ["53", "69"],
-        f"{category_text.capitalize()} are allowed purposes (Art. 53). Statistics answer the question (Art. 69).",
+        f"{purpose_statement} Statistics answer the question (Art. 69)",
         category_text,
         ["default_statistical"],
     )
