@@ -1,0 +1,14 @@
+{
+  "id": "NEW-B",
+  "requested_as": "health data request",
+  "requested_format": "anonymised statistics",
+  "purpose": "Public health research on asthma treatment.",
+  "question": "Among adults with asthma, what percentage are on active salmeterol/fluticasone, by sex?",
+  "definitions": [
+    "Adult = aged 18 or older on 31 December 2025.",
+    "Asthma = any condition with an ICD-10 code starting with J45.",
+    "Salmeterol/fluticasone = ATC code starting with R03AK.",
+    "A medication is active on 31 December 2025 if start_date is on or before that day and end_date is empty or on or after that day.",
+    "Report per sex: adults with asthma, % with an active salmeterol/fluticasone."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "NEW-D",
+  "requested_as": "health data request",
+  "requested_format": "anonymised statistics",
+  "purpose": "Public health research on blood pressure in hypertension.",
+  "question": "What is the mean latest systolic blood pressure of patients with hypertension, by 10-year age band?",
+  "definitions": [
+    "Hypertension = any condition with an ICD-10 code starting with I10.",
+    "Use the latest systolic blood pressure (LOINC 8480-6) per patient.",
+    "Report per 10-year age band: mean systolic blood pressure."
+  ]
+}
