@@ -238,6 +238,8 @@ _LEGITIMATE_ART54_CASES = [
     "Study prescribing of SGLT2 inhibitors by physicians since market authorisation to evaluate uptake of guidelines.",
     "The ministry plans a public-health campaign targeting GPs to improve statin prescribing in line with guidelines.",
     "A hospital quality report assesses staff performance in clinical documentation.",
+    "Evaluate the impact of alcohol marketing on youth drinking to inform public health policy.",
+    "Evaluate whether patients denied rehabilitation have worse outcomes.",
 ]
 
 
@@ -251,14 +253,17 @@ def test_legitimate_public_health_requests_are_not_rejected(text):
     assert decision.decision == "APPROVE_STATISTICAL", decision.triggered_rules
 
 
-_PROHIBITED_CREDIT_CASES = [
+_PROHIBITED_ART54_CASES = [
     "We will use the data to deny loan applications from people with chronic disease.",
     "The insurer wants to raise premiums for policyholders with heart failure.",
+    "Our sales team wants to know which GPs prescribe most statins so our reps can visit them.",
+    "We plan an advertising campaign for our new inhaler in regions with most asthma.",
+    "We are launching a new vape brand and want to know which age groups smoke most.",
 ]
 
 
-@pytest.mark.parametrize("text", _PROHIBITED_CREDIT_CASES)
-def test_specific_credit_decisions_are_rejected(text):
+@pytest.mark.parametrize("text", _PROHIBITED_ART54_CASES)
+def test_specific_prohibited_purposes_are_rejected(text):
     decision = decide({
         **base,
         "purpose": text,
@@ -407,8 +412,8 @@ def test_rejected_requests_are_final_and_audit_event_has_no_answer():
     request = {
         **base,
         "id": "AUDIT-REJECT",
-        "purpose": _PROHIBITED_CREDIT_CASES[0],
-        "question": _PROHIBITED_CREDIT_CASES[0],
+        "purpose": _PROHIBITED_ART54_CASES[0],
+        "question": _PROHIBITED_ART54_CASES[0],
     }
     response = process_request(request)
     assert response["decision"] == "REJECT"

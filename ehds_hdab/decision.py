@@ -43,8 +43,17 @@ def _prohibited(request):
         r"\b(?:prescrib\w*|gps?\b|physician\w*|doctors?\b|consumers?\b|customers?\b)\b",
         text,
     )
-    sales_representatives = re.search(r"\bsales\s+(?:representatives?|reps?)\b", text)
-    marketing_language = re.search(r"\bmarketing\b|\badvertis\w*", text)
+    sales_representatives = re.search(
+        r"\bsales\s+(?:representatives?|reps?|team|force|department)\b|"
+        r"\b(?:our|medical|pharma\w*)\s+reps?\b",
+        text,
+    )
+    marketing_language = re.search(
+        r"\b(?:for|our|its|their)\s+(?:\w+\s+){0,2}(?:marketing|advertising)\b|"
+        r"\b(?:marketing|advertising)\s+(?:purposes?|materials?|to|of\s+(?:our|its|their))\b|"
+        r"\badvertis(?:e|ing)\s+(?:our|its|their|the|a|new)\b",
+        text,
+    )
     nonmarketing_reference = re.search(
         r"\bmarketing\s+(?:authori[sz]ation|surveillance)\b|"
         r"\bpost[- ]marketing\s+surveillance\b",
@@ -119,9 +128,13 @@ def _prohibited(request):
         return "detrimental_individual_decisions"
     if re.search(r"\b(?:re-identif|reidentif|identify people|identify individuals|match records)\w*\b", text):
         return "reidentification"
-    harmful = re.search(r"\b(?:tobacco|nicotine|alcohol|illicit drugs?|weapons?|gambling)\b", text)
+    harmful = re.search(
+        r"\b(?:tobacco|nicotine|cigarett\w*|e-cigarett\w*|vap(?:e|es|ing)|alcohol|illicit drugs?|weapons?|gambling)\b",
+        text,
+    )
     product_cue = re.search(
-        r"\b(?:develop\w*|manufactur\w*|product development|commercial\w*|sell|sales|market\w*|launch\w*)\b",
+        r"\b(?:develop\w*|manufactur\w*|product development|commercial\w*|sell|sales|launch\w*|"
+        r"position\w*|flavours?|flavors?|brands?|(?:bring|brought|go|going)\s+to\s+market)\b",
         text,
     )
     if harmful and product_cue:

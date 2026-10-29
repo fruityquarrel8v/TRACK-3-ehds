@@ -1,4 +1,101 @@
-# Track 3: European Health Data Space
+# EHDS Health Data Access Body – prototype (Track 3)
+
+A working, rule-based Health Data Access Body (HDAB). It reads a data request in the challenge JSON format, decides **REJECT / APPROVE_STATISTICAL / APPROVE_SPE** with the EHDS articles, computes the requested anonymised statistics from the synthetic data, and gives approved applicants a secure processing environment (SPE) with downloads blocked.
+
+Nothing is hardcoded for R01–R10: every request is parsed from its own `purpose`, `question` and `definitions`. No LLM or external service is used, so no data (patient-level or otherwise) ever leaves the machine, and the same request always gives the same answer.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py                     # web app: http://localhost:8501
+python evaluate.py                       # the challenge metrics on requests/R01–R10
+python -m ehds_hdab requests/R01.json    # one request from the command line (JSON out)
+python -m pytest -q                      # tests
+```
+
+Python 3.10+, pandas, Streamlit.
+
+## Metric results on the 10 requests
+
+Measured with `python evaluate.py` (each request run 3 times):
+
+| Metric | Result | Target |
+|---|---|---|
+| Correct decisions | **10 of 10** (decision and articles) | 10 of 10 |
+| Correct numbers | **6 of 6** | 6 of 6 |
+| Privacy leaks | **0** | 0 |
+| Consistency | **10 of 10** over 3 runs | 10 of 10 |
+| Time to answer | **0.21 s** slowest (after the data is loaded once, ≈2 s) | under 60 s |
+
+| Request | Decision | Articles |
+|---|---|---|
+| R01 | APPROVE_STATISTICAL | 53, 69 |
+| R02 | REJECT (insurance premiums) | 54 |
+| R03 | APPROVE_STATISTICAL | 53, 69 |
+| R04 | REJECT (advertising) | 54 |
+| R05 | APPROVE_SPE (ML model needs individual histories) | 53, 66, 68, 73 |
+| R06 | REJECT (employment decisions, re-identification) | 54 |
+| R07 | APPROVE_STATISTICAL | 53, 69 |
+| R08 | APPROVE_STATISTICAL | 53, 69 |
+| R09 | APPROVE_STATISTICAL (records not justified) | 53, 66, 69 |
+| R10 | REJECT (harmful product development) | 54 |
+
+Beyond the 10 examples, `tests/` contains 64 tests, including new requests in `tests/new_requests/` (inpatient stays by hospital filtered on main diagnosis, medication shares by sex, a condition named without a code, latest blood pressure by age band, a tobacco product request, a public-health request, an SPE readmission-model request) whose expected numbers are computed independently with plain pandas, plus legitimate requests that must not be rejected and disguised prohibited ones that must be.
+
+## Architecture
+
+```
+request JSON
+   │
+   ▼
+decision.py ── Art. 54 prohibited purpose? ──yes──► REJECT (Art. 54)
+   │ no
+   ├─ "health data request" ────────────────────► APPROVE_STATISTICAL (Art. 53, 69)
+   ├─ access application + justified need for records ► APPROVE_SPE (Art. 53, 66, 68, 73)
+   └─ access application, statistics suffice ───► APPROVE_STATISTICAL (Art. 53, 66, 69)
+   │
+   ▼
+parser.py + terminology.py  →  QueryPlan (concepts with ICD-10 / ATC / LOINC codes,
+   │                            cohort, metrics, group-by dimensions)
+   ▼
+data.py (pandas, opted-out patients removed from all 5 tables at load time)
+   │
+   ├─ statistical ──► engine.py (exact Decimal maths) ──► privacy.py (small-cell rule,
+   │                                                       output privacy check) ──► answer
+   └─ SPE ──────────► spe.py (workspace with only the cohort + requested record types,
+                      manifest, download blocked) ──► audit.py (JSONL log)
+```
+
+| Component | What it does |
+|---|---|
+| `ehds_hdab/decision.py` | Rule-based decision in the README order. Detects Art. 54 purposes (insurance/credit decisions, advertising/marketing, employment decisions, re-identification, harmful products, detrimental decisions about people). SPE only when the applicant explains why statistics are not enough (e.g. training a model, individual-level histories). Returns decision, articles, plain-language reason and the Art. 53 purpose category. |
+| `ehds_hdab/parser.py` | Turns the free-text `definitions` and `question` into a `QueryPlan`: diagnoses ("ICD-10 code starting with E11"), medications (ATC prefixes, active on 31 Dec 2025), observations (LOINC, latest/earliest/highest/lowest per patient), encounters (type, year, main diagnosis), age bands, ratio formulas (`X = A / B × 100`), counts, percentages, means and group-by dimensions (region, age band, sex, hospital). Anything it cannot interpret becomes a warning for staff instead of a crash. |
+| `ehds_hdab/terminology.py` | Dictionary of common medical terms → ICD-10 / ATC / LOINC (used when a request gives a name but no code), with a fallback lookup in the data. |
+| `ehds_hdab/data.py` | Loads the five CSV files once (cached), removes every opted-out patient (Art. 71) from all tables, computes age = 2025 − birth year. |
+| `ehds_hdab/engine.py` | Executes the plan for every requested group (cartesian product, so empty groups are shown too). Vectorised pandas; exact `Decimal` arithmetic. |
+| `ehds_hdab/privacy.py` | Small-cell rule: counts < 10 (incl. 0) → `<10`; percentages with numerator or denominator < 10 → `suppressed`; means of < 10 patients → `suppressed`; one decimal, halves up. Then scans the output for patient IDs, record lists and small counts. |
+| `ehds_hdab/spe.py` | Creates `spe_workspaces/<request id>/` with the pseudonymised cohort and only the record types requested, plus a manifest (legal basis, cohort size, `download_allowed: false`). Any download/export call raises `DownloadBlockedError` and is logged. |
+| `ehds_hdab/audit.py` | Append-only JSONL audit log of decisions, SPE creation and blocked downloads (no patient data). |
+| `ehds_hdab/pipeline.py` | Ties it together: decide → parse → compute or create SPE → privacy check. |
+| `app.py` | Streamlit web app: **Applicant portal** (pick an example, upload/paste JSON or fill in a form; see decision, reason, articles, result table), **Staff dashboard** (all decisions, review flags, query plan, audit log), **Secure processing environment** (browse workspace tables; download button blocked and logged), **Evaluation** (runs the metrics live). |
+| `evaluate.py` | Runs R01–R10 three times and reports the README metrics against `requests/expected.json`. |
+
+### Design choices
+
+- **Rules instead of an LLM.** Deterministic, fast, explainable, and nothing leaves the HDAB. Unclear wording is flagged for staff review rather than guessed.
+- **One central pandas database.** The data is small (≈7 MB), so a central in-memory store is simplest; opt-outs are removed once, at load time, so no later step can include them.
+- **Privacy as the last step.** All numbers pass through one small-cell function and an output check before anyone sees them.
+
+## What works and what does not
+
+- Works: all 10 example requests; new requests with other conditions, medications, lab values, encounter filters (incl. main diagnosis `primary_icd10`), grouping by hospital/sex/age band/region, ratio definitions, and decision wording beyond the examples (tested in `tests/`).
+- Limits: the parser understands the definition style used in the challenge requests, not arbitrary prose; unusual phrasing produces a staff-review warning. Art. 54 detection is keyword/pattern based, so a cleverly disguised purpose could pass and needs a human reviewer. The SPE is a simulation (a locked folder + blocked export API), not a real isolated compute environment.
+
+
+---
+
+# Challenge description (from the organisers)
 
 The European Health Data Space (EHDS) lets researchers, agencies and companies reuse health data. In each EU country, a Health Data Access Body decides every request. Approved applicants get anonymised statistics or pseudonymised records inside a secure processing environment (SPE) that they cannot download from.
 
