@@ -134,7 +134,10 @@ def page_applicant():
     elif source == "Upload JSON":
         f = st.file_uploader("Request JSON", type="json")
         if f:
-            request = json.loads(f.read().decode("utf-8"))
+            try:
+                request = json.loads(f.read().decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                st.error(f"Invalid JSON file: {e}")
     elif source == "Paste JSON":
         txt = st.text_area("Request JSON", height=300)
         if txt.strip():
