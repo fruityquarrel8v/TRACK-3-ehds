@@ -894,6 +894,12 @@ def _criteria_period_summary(criteria):
         start, end = metric.get("period_start"), metric.get("period_end")
         if start or end:
             bounds.append((start, end))
+    year_group = next((g for g in criteria.get("group_by", []) or []
+                       if isinstance(g, dict) and g.get("dimension") == "year"), None)
+    if year_group:
+        span = (f"{year_group['from']}\u2013{year_group['to']}" if year_group.get("from") and year_group.get("to")
+                else "2023\u20132025 or the period given")
+        return f"Per calendar year, {span}"
     if not bounds:
         return "No time period applied."
     labels = []
