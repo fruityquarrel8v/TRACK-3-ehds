@@ -1261,6 +1261,19 @@ def _period_phrase(start, end):
     return ""
 
 
+def _describe_full(criteria):
+    """describe_criteria() plus the requested grouping and measures, so nothing requested is hidden."""
+    text = describe_criteria(criteria)
+    labels = {"region": "region", "data_holder": "hospital", "sex": "sex", "age_band": "age band", "year": "year"}
+    dims = [labels.get(g.get("dimension"), g.get("dimension")) for g in criteria.get("group_by", []) or []]
+    if dims:
+        text += " Compared by " + " and ".join(dims) + "."
+    measures = [m.get("label") for m in criteria.get("metrics", []) or [] if m.get("label")]
+    if measures:
+        text += " Measures: " + ", ".join(measures) + "."
+    return text
+
+
 def _interpretation_rows(criteria):
     """Plain-language rows for the understanding/review cards: (label, value, detail)."""
     rows = []
@@ -1560,7 +1573,7 @@ def _screen_review():
     _title("Verify", "Your research request is ready for review",
            f"\u201c{draft['question']}\u201d" if draft.get("question") else "")
     _card("Summary", _interpretation_rows(criteria))
-    st.info(describe_criteria(criteria))
+    st.info(_describe_full(criteria))
     if draft.get("assumptions"):
         st.markdown("**Assumptions applied:**")
         for a in draft["assumptions"]:
@@ -1610,7 +1623,7 @@ def _screen_review():
         ("Applicant", f"{name or '—'}, {org or '—'} ({country or '—'})", "Identity is kept between requests"),
         ("Declared purpose", purpose or "— (required)", "Checked against Art. 53 (permitted) and Art. 54 (prohibited)"),
         ("Access requested", request_type + (f" — records: {', '.join(record_types)}" if record_types else ""), ""),
-        ("Interpreted as", describe_criteria(criteria), ""),
+        ("Interpreted as", _describe_full(criteria), ""),
     ])
     st.caption("The decision is made on exactly these values; nothing from an earlier request is reused.")
     b1, b2, b3 = st.columns([1.4, 1, 1])
