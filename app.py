@@ -49,7 +49,7 @@ REQUEST_TYPES = {
     "(health data access application)": "health data access application",
 }
 
-st.set_page_config(page_title="EHDS Health Data Access Body", layout="wide")
+st.set_page_config(page_title="Health Data Navigator \u2013 EHDS prototype", layout="wide")
 
 
 @st.cache_resource
@@ -824,25 +824,105 @@ DECISION_EXPLANATIONS = {
 }
 STYLE = """
 <style>
-.block-container {max-width: 1040px; padding-top: 2.2rem;}
-.hero {text-align: center; margin: 1.5rem 0 1rem 0;}
-.hero h1 {font-size: 2.5rem; font-weight: 700; color: #2B2D33; margin-bottom: .4rem;}
-.hero p {color: #6B6F76; font-size: 1.08rem; margin: 0 auto 1rem auto; max-width: 640px;}
-div[data-testid="stTextArea"] textarea {border-radius: 16px; font-size: 1.08rem; padding: 1rem;}
-div.stButton > button {border-radius: 12px; padding: .5rem 1.1rem;}
-.card {background: #FFFFFF; border: 1px solid #ECEBF5; border-radius: 16px; padding: 1.2rem 1.5rem;
-       box-shadow: 0 2px 12px rgba(60, 60, 90, .06); margin-bottom: 1rem;}
-.card h3 {margin: 0 0 .7rem 0; font-size: 1.15rem; color: #2B2D33;}
-.card .row {display: flex; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid #F1F0F7;}
-.card .row:last-child {border-bottom: none;}
-.card .k {min-width: 150px; color: #6B6F76; font-size: .92rem; padding-top: .1rem;}
-.card .v {color: #2B2D33; font-weight: 600;}
-.card .d {display: block; color: #8A8E96; font-size: .82rem; font-weight: 400; margin-top: .1rem;}
-.steps {color: #8A8E96; margin: .2rem 0 1rem 0; font-size: .95rem;}
-.steps b {color: #5B5FC7;}
-.quiet {color: #8A8E96; font-size: .85rem;}
+:root {--navy: #1B2A4E; --ink: #2A3550; --muted: #5B6680; --blue: #1F5EFF; --blue-dark: #174BD1;
+       --tint: #EEF4FF; --tint-2: #F6F9FF; --line: #DCE6F7; --green: #1E8E5A; --green-tint: #E8F7EF;}
+.block-container {max-width: 1120px; padding-top: 3.4rem;}
+h1, h2, h3, h4 {color: var(--navy) !important; letter-spacing: -.01em;}
+.hdn-header {display: flex; align-items: center; justify-content: space-between; padding: .2rem 0 1rem 0;
+             border-bottom: 1px solid var(--line); margin-bottom: 1.4rem;}
+.hdn-brand {display: flex; align-items: center; gap: .9rem;}
+.hdn-brand .t {font-size: 1.55rem; font-weight: 800; color: var(--navy); line-height: 1.1;}
+.hdn-brand .s {font-size: .9rem; color: var(--muted); margin-top: .15rem;}
+.hdn-eu {display: flex; align-items: center; gap: .6rem; font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+         color: #1E3A8A; text-transform: uppercase; line-height: 1.25;}
+.eyebrow {font-size: .74rem; font-weight: 700; letter-spacing: .16em; color: #5B6680; text-transform: uppercase;
+          margin: .2rem 0 .3rem 0;}
+.hero h1 {font-size: 2.35rem; font-weight: 800; color: var(--navy); margin: 0 0 .5rem 0; line-height: 1.15;}
+.hero p {color: var(--muted); font-size: 1.05rem; margin: 0 0 1rem 0; max-width: 640px;}
+.screen-title {font-size: 1.7rem; font-weight: 800; color: var(--navy); margin: 0 0 .3rem 0;}
+.screen-sub {color: var(--muted); margin: 0 0 1rem 0;}
+div[data-testid="stTextArea"] textarea {border-radius: 12px; border: 1px solid var(--line); font-size: 1.05rem;
+                                         padding: 1rem; background: #fff;}
+div.stButton > button, div.stDownloadButton > button {border-radius: 10px; padding: .55rem 1.15rem; font-weight: 600;
+                                                       border: 1px solid var(--line); color: var(--navy);}
+div.stButton > button[kind="primary"] {background: var(--blue); border-color: var(--blue); color: #fff;}
+div.stButton > button[kind="primary"]:hover {background: var(--blue-dark); border-color: var(--blue-dark);}
+.card {background: #FFFFFF; border: 1px solid var(--line); border-radius: 16px; padding: 1.2rem 1.3rem;
+       box-shadow: 0 4px 18px rgba(27, 42, 78, .06); margin-bottom: 1rem;}
+.card .head {display: flex; align-items: center; gap: .7rem; margin-bottom: .25rem;}
+.card .head .chk {width: 30px; height: 30px; border-radius: 50%; background: var(--green-tint); color: var(--green);
+                  display: inline-flex; align-items: center; justify-content: center; flex: none;}
+.card h3 {margin: 0; font-size: 1.25rem; color: var(--navy); font-weight: 800;}
+.card .lead {color: var(--muted); font-size: .92rem; margin: 0 0 .9rem 0;}
+.card .row {display: flex; align-items: center; gap: .9rem; background: var(--tint); border-radius: 12px;
+            padding: .7rem .9rem; margin-bottom: .5rem; border: 1px solid transparent;}
+.card .row .ic {width: 34px; height: 34px; border-radius: 9px; background: #fff; color: var(--blue); flex: none;
+                display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(27,42,78,.08);}
+.card .row .k {color: var(--muted); font-size: .8rem; margin-bottom: .1rem;}
+.card .row .v {color: var(--navy); font-weight: 700; font-size: 1rem;}
+.card .row .d {display: block; color: #6F7A94; font-size: .8rem; font-weight: 400; margin-top: .1rem;}
+.banner-ok {display: flex; align-items: center; gap: .8rem; background: var(--green-tint); border-radius: 12px;
+            padding: .8rem 1rem; margin: .2rem 0 1rem 0; border: 1px solid #CDEBD9;}
+.banner-ok .ic {width: 34px; height: 34px; border-radius: 9px; background: var(--green); color: #fff; flex: none;
+                display: inline-flex; align-items: center; justify-content: center;}
+.banner-ok b {color: #176B45; display: block; font-size: .95rem;}
+.banner-ok span {color: #3F6B55; font-size: .85rem;}
+.strip {display: flex; gap: 1.2rem; margin: 1.2rem 0 .6rem 0; flex-wrap: wrap;}
+.strip .st {flex: 1 1 200px; min-width: 180px;}
+.strip .num {display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
+             border-radius: 50%; background: var(--tint); color: var(--navy); font-weight: 800; margin-right: .6rem;}
+.strip .num.on {background: var(--blue); color: #fff;}
+.strip .ti {font-weight: 800; color: var(--navy); margin-top: .6rem; font-size: 1.02rem;}
+.strip .tx {color: var(--muted); font-size: .9rem; line-height: 1.4;}
+.howbox {background: var(--tint-2); border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.2rem; margin-top: 1rem;}
+.howbox .h {font-weight: 700; color: var(--navy); margin-bottom: .6rem;}
+.howbox .cols {display: flex; gap: 1.5rem; flex-wrap: wrap;}
+.howbox .col {flex: 1 1 280px;}
+.howbox .col b {display: block; color: var(--navy); margin-bottom: .2rem;}
+.howbox .col span {color: var(--muted); font-size: .9rem; line-height: 1.45;}
+.steps {display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; color: var(--muted);
+        margin: .2rem 0 1.1rem 0; font-size: .92rem;}
+.steps .n {display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--tint);
+           align-items: center; justify-content: center; font-weight: 700; color: var(--navy); margin-right: .35rem;}
+.steps .on .n {background: var(--blue); color: #fff;}
+.steps .on {color: var(--navy); font-weight: 700;}
+.steps .sep {color: var(--line); margin: 0 .3rem;}
+.quiet {color: #8A93A8; font-size: .82rem;}
+section[data-testid="stSidebar"] {background: var(--tint-2); border-right: 1px solid var(--line);}
+section[data-testid="stSidebar"] div[role="radiogroup"] label {padding: .5rem .8rem; border-radius: 10px;
+        margin-bottom: .15rem; color: var(--navy); font-weight: 600;}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {background: #DCE8FF;}
+section[data-testid="stSidebar"] .side-foot {color: var(--muted); font-size: .9rem; margin-top: 2rem;
+        border-top: 3px solid var(--blue); padding-top: .6rem; max-width: 150px;}
+div[data-testid="stAlert"] {border-radius: 12px;}
+div[data-testid="stMetric"] {background: var(--tint); border-radius: 14px; padding: .8rem 1rem;}
 </style>
 """
+
+ICONS = {
+    "people": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    "ribbon": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.5 13 17 22l-5-3-5 3 1.5-9"/></svg>',
+    "bars": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-6"/></svg>',
+    "pill": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>',
+    "calendar": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+    "pin": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+    "hospital": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>',
+    "target": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>',
+    "columns": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg>',
+    "check": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    "shield": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>',
+    "doc": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>',
+}
+ROW_ICONS = {"Population": "people", "Condition": "ribbon", "Age": "people", "Sex": "people", "Combination": "columns", "Compare by": "columns",
+             "Hospital stays": "hospital", "Hospital": "hospital", "Medication": "pill", "Measurement": "bars",
+             "Region": "pin", "Period": "calendar", "Analysis": "bars", "Records requested": "doc", "Purpose": "target"}
+LOGO = ('<svg width="44" height="44" viewBox="0 0 44 44" fill="none"><rect x="16" y="4" width="12" height="36" rx="4" '
+        'fill="#1F5EFF"/><rect x="4" y="16" width="36" height="12" rx="4" fill="#1F5EFF"/><rect x="4" y="16" width="12" '
+        'height="12" rx="4" fill="#2BB596"/><rect x="28" y="16" width="12" height="12" rx="4" fill="#2BB596"/></svg>')
+EU_FLAG = ('<svg width="40" height="27" viewBox="0 0 40 27"><rect width="40" height="27" rx="3" fill="#003399"/>'
+           + "".join(f'<circle cx="{20 + 8 * __import__("math").cos(i * 0.5236):.2f}" '
+                     f'cy="{13.5 + 8 * __import__("math").sin(i * 0.5236):.2f}" r="1.1" fill="#FFCC00"/>' for i in range(12))
+           + "</svg>")
 
 
 def _go(stage):
@@ -858,13 +938,54 @@ def _escape(text):
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _card(title, rows):
+def _card(title, rows, lead="", check=True):
     body = "".join(
-        f'<div class="row"><div class="k">{_escape(k)}</div><div class="v">{_escape(v)}'
-        + (f'<span class="d">{_escape(d)}</span>' if d else "") + "</div></div>"
+        f'<div class="row"><div class="ic">{ICONS.get(ROW_ICONS.get(k, "doc"))}</div>'
+        f'<div><div class="k">{_escape(k)}</div><div class="v">{_escape(v)}'
+        + (f'<span class="d">{_escape(d)}</span>' if d else "") + "</div></div></div>"
         for k, v, d in rows
     )
-    st.markdown(f'<div class="card"><h3>{_escape(title)}</h3>{body}</div>', unsafe_allow_html=True)
+    head = (f'<div class="head">{"<span class=chk>" + ICONS["check"] + "</span>" if check else ""}'
+            f"<h3>{_escape(title)}</h3></div>")
+    lead_html = f'<p class="lead">{_escape(lead)}</p>' if lead else ""
+    st.markdown(f'<div class="card">{head}{lead_html}{body}</div>', unsafe_allow_html=True)
+
+
+def _aggregate_banner():
+    st.markdown(f'<div class="banner-ok"><div class="ic">{ICONS["shield"]}</div><div>'
+                "<b>Only aggregated information may be released.</b>"
+                "<span>No personal or patient-level data will be provided.</span></div></div>",
+                unsafe_allow_html=True)
+
+
+def _title(eyebrow, title, sub=""):
+    st.markdown(f'<div class="eyebrow">{_escape(eyebrow)}</div><div class="screen-title">{_escape(title)}</div>'
+                + (f'<p class="screen-sub">{_escape(sub)}</p>' if sub else ""), unsafe_allow_html=True)
+
+
+FLOW_STEPS = [
+    ("Describe", "Write your research question in plain language.", "doc"),
+    ("Verify", "We check the purpose, feasibility and privacy, and refine the request with you.", "shield"),
+    ("Get a safe answer", "You receive aggregated results that meet EHDS rules.", "bars"),
+]
+
+
+def _flow_strip(active=1):
+    parts = "".join(
+        f'<div class="st"><span class="num{" on" if i == active else ""}">{i}</span>'
+        f'<span style="color:#1F5EFF;vertical-align:middle">{ICONS[icon]}</span>'
+        f'<div class="ti">{_escape(name)}</div><div class="tx">{_escape(text)}</div></div>'
+        for i, (name, text, icon) in enumerate(FLOW_STEPS, 1)
+    )
+    st.markdown(f'<div class="strip">{parts}</div>', unsafe_allow_html=True)
+
+
+def _header():
+    st.markdown(
+        f'<div class="hdn-header"><div class="hdn-brand">{LOGO}<div><div class="t">Health Data Navigator</div>'
+        '<div class="s">Research workspace \u2022 Synthetic demonstration \u2022 Simulated EHDS health data access body</div>'
+        f'</div></div><div class="hdn-eu">{EU_FLAG}<span>A European<br>Health Data Space<br>initiative</span></div></div>',
+        unsafe_allow_html=True)
 
 
 def _period_phrase(start, end):
@@ -900,7 +1021,7 @@ def _interpretation_rows(criteria):
             elif item.get("onset_end"):
                 when = f"diagnosed {when}"
             value = f"{prefix}people with {label}" + (f", {when}" if when else "")
-            rows.append(("Population", value, f"Identified using ICD-10 {', '.join(item.get('icd10', []))} codes"))
+            rows.append(("Condition", value, f"Identified using ICD-10 {', '.join(item.get('icd10', []))} codes"))
         elif kind == "hospital_stay":
             when = _period_phrase(item.get("period_start"), item.get("period_end"))
             codes = item.get("icd10") or []
@@ -1008,16 +1129,16 @@ def _apply_clarification(draft, question, action):
 
 
 def _screen_welcome(examples):
-    st.markdown('<div class="hero"><h1>What would you like to research?</h1>'
-                "<p>Describe your research question in your own words. We'll help you turn it into a "
-                "structured research request.</p></div>", unsafe_allow_html=True)
+    st.markdown('<div class="hero"><div class="eyebrow">Ask health data</div><h1>What would you like to research?</h1>'
+                "<p>Use everyday language to describe your research question. We'll help you turn it into a "
+                "safe and valid request for the European Health Data Space.</p></div>", unsafe_allow_html=True)
     if "pending_question" in st.session_state:
         st.session_state["research_question"] = st.session_state.pop("pending_question")
     question = st.text_area("Your research question", key="research_question", height=140,
                             placeholder="Show HbA1c trends in patients with type 2 diabetes.",
                             label_visibility="collapsed")
     left, _ = st.columns([1, 3])
-    if left.button("Continue", type="primary", key="welcome_continue", width="stretch"):
+    if left.button("Check my request \u2192", type="primary", key="welcome_continue", width="stretch"):
         if not question.strip():
             st.warning("Please describe what you would like to research, or pick an example below.")
         else:
@@ -1031,6 +1152,7 @@ def _screen_welcome(examples):
                 "ok": interpretation.ok(), "source": "question", "clarified": {},
             }
             _go("understand")
+    _flow_strip(active=1)
     st.caption("Try an example:")
     for col, (label, text) in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
         if col.button(label, key=f"example_{_slug_key(label)}", width="stretch"):
@@ -1041,6 +1163,15 @@ def _screen_welcome(examples):
     if st.button("Build your request with me", key="start_guided"):
         st.session_state["guided_step"] = 1
         _go("guided")
+    st.markdown(
+        f'<div class="howbox"><div class="h">How it works: Guardian checks purpose and privacy \u2022 '
+        'Evidence computes the numbers</div><div class="cols">'
+        f'<div class="col"><b>Guardian</b><span>Checks your request against the permitted (Art. 53) and prohibited '
+        '(Art. 54) purposes, applies the small-cell rule and the disclosure ledger, and ensures only aggregated '
+        'information can be released.</span></div>'
+        '<div class="col"><b>Evidence</b><span>Calculates every statistic deterministically from the data with '
+        'documented clinical definitions, so each result is reproducible and independently verifiable.</span></div>'
+        '</div></div>', unsafe_allow_html=True)
     st.markdown("")
     with st.expander("Advanced options", expanded=False):
         st.caption("For technical users: submit requests in the challenge JSON format.")
@@ -1055,11 +1186,13 @@ def _slug_key(text):
 def _screen_understand():
     draft = _draft()
     criteria = draft.get("criteria") or {}
-    st.markdown("### Here's how I understood your research question")
-    st.caption(f"\u201c{draft.get('question', '')}\u201d")
+    _flow_strip(active=2)
+    _title("Verify", "Here's how I understood your research question", f"\u201c{draft.get('question', '')}\u201d")
     rows = _interpretation_rows(criteria) if draft.get("ok") else []
     if rows:
-        _card("Your research request", rows)
+        _card("Your request, understood", rows,
+              lead="We've identified the key elements of your request. Please confirm they are correct.")
+        _aggregate_banner()
     if draft.get("assumptions"):
         st.markdown("**I assumed:**")
         for a in draft["assumptions"]:
@@ -1144,9 +1277,9 @@ def _screen_clarify():
 def _screen_review():
     draft = _draft()
     criteria = draft.get("criteria") or {}
-    st.markdown("### Your research request is ready for review")
-    if draft.get("question"):
-        st.caption(f"\u201c{draft['question']}\u201d")
+    _flow_strip(active=2)
+    _title("Verify", "Your research request is ready for review",
+           f"\u201c{draft['question']}\u201d" if draft.get("question") else "")
     _card("Summary", _interpretation_rows(criteria))
     st.info(describe_criteria(criteria))
     if draft.get("assumptions"):
@@ -1216,7 +1349,8 @@ def _screen_result():
         _go("welcome")
         return
     approved = resp["decision"] != "REJECT"
-    st.markdown("### Your research results" if approved else "### Decision on your request")
+    _flow_strip(active=3)
+    _title("Safe answer", "Your research results" if approved else "Decision on your request")
     if resp.get("withheld"):
         st.write("Your purpose is permitted, but releasing this particular result could reveal a protected small group "
                  "when combined with statistics released earlier, so it is withheld.")
@@ -1245,8 +1379,10 @@ GUIDED_GOALS = ["Explore a medical condition", "Compare patient groups", "Study 
 
 
 def _progress(step):
-    parts = [f"<b>{i}. {name}</b>" if i == step else f"{i}. {name}" for i, name in enumerate(GUIDED_STEPS, 1)]
-    st.markdown('<div class="steps">' + " &rarr; ".join(parts) + "</div>", unsafe_allow_html=True)
+    parts = [f'<span class="{"on" if i == step else ""}"><span class="n">{i}</span>{name}</span>'
+             for i, name in enumerate(GUIDED_STEPS, 1)]
+    st.markdown('<div class="steps">' + '<span class="sep">&mdash;</span>'.join(parts) + "</div>",
+                unsafe_allow_html=True)
 
 
 def _population_step(data):
@@ -1409,7 +1545,6 @@ def _keep_widget_state():
 
 
 def page_applicant():
-    st.markdown(STYLE, unsafe_allow_html=True)
     _keep_widget_state()
     examples = example_requests()
     stage = st.session_state.get("stage", "welcome")
@@ -1545,8 +1680,7 @@ DEMO_SCENARIOS = [
 
 
 def page_demo():
-    st.markdown(STYLE, unsafe_allow_html=True)
-    st.header("Demo scenarios")
+    _title("Judges", "Demo scenarios")
     st.write("Four prepared scenarios for the judges. Every button runs the real pipeline on the synthetic data; "
              "nothing is pre-recorded. Message: *following a privacy rule is not always the same as protecting privacy.*")
     c1, c2 = st.columns([3, 1])
@@ -1586,7 +1720,7 @@ def page_demo():
 
 
 def page_staff():
-    st.header("Staff dashboard")
+    _title("Administrative staff", "Staff dashboard")
     if st.button("Process all example requests"):
         for req in example_requests().values():
             store(process_request(req), req)
@@ -1633,7 +1767,7 @@ def page_staff():
 
 
 def page_spe():
-    st.header("Secure processing environment (SPE)")
+    _title("Approved researchers", "Secure processing environment (SPE)")
     st.write("Approved applicants analyse pseudonymised records here. Data cannot be downloaded or exported.")
     root = Path(config.SPE_ROOT)
     workspaces = sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
@@ -1666,7 +1800,7 @@ def page_spe():
 
 
 def page_evaluation():
-    st.header("Evaluation on the 10 challenge requests")
+    _title("Validation", "Evaluation on the 10 challenge requests")
     st.write("Runs every request 3 times and compares with `requests/expected.json`.")
     if st.button("Run evaluation", type="primary"):
         import subprocess
@@ -1680,7 +1814,11 @@ def page_evaluation():
 warm_data()
 PAGES = {"Research assistant": page_applicant, "Demo scenarios": page_demo, "Staff dashboard": page_staff,
          "Secure processing environment": page_spe, "Evaluation": page_evaluation}
-st.sidebar.title("EHDS Health Data Access Body")
+st.markdown(STYLE, unsafe_allow_html=True)
+_header()
+st.sidebar.markdown('<div class="eyebrow">Navigate</div>', unsafe_allow_html=True)
+_page = st.sidebar.radio("View", list(PAGES), label_visibility="collapsed")
+st.sidebar.markdown('<div class="side-foot">Better health data for a healthier Europe</div>', unsafe_allow_html=True)
 st.sidebar.caption("Simulated HDAB for AIM Hackathon Vienna 2026, Track 3. Synthetic data only.")
 st.sidebar.caption(PROTOTYPE_DISCLAIMER)
-PAGES[st.sidebar.radio("View", list(PAGES))]()
+PAGES[_page]()
