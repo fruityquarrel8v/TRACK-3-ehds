@@ -13,9 +13,10 @@ import streamlit as st
 from ehds_hdab import config
 from ehds_hdab.criteria import criteria_to_definitions, describe_criteria
 from ehds_hdab.data import load_data
+from ehds_hdab.nl import interpret_question
 from ehds_hdab.pipeline import process_request
 from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
-from ehds_hdab.terminology import entries
+from ehds_hdab.terminology import display_name, entries
 
 ROOT = Path(__file__).resolve().parent
 REQUESTS_DIR = ROOT / "requests"
@@ -101,7 +102,16 @@ def show_response(resp, staff=False):
     if resp.get("needs_staff_review"):
         st.warning("Parts of this request could not be interpreted automatically. A staff member will review it.")
     answer = resp.get("answer")
-    if resp["decision"] == "APPROVE_STATISTICAL" and answer:
+    if resp.get("withheld"):
+        reason = next(
+            (
+                warning for warning in resp.get("warnings", [])
+                if warning.startswith("Results withheld:")
+            ),
+            "Results withheld for differencing protection. Staff review required.",
+        )
+        st.warning(reason)
+    elif resp["decision"] == "APPROVE_STATISTICAL" and answer:
         st.markdown("**Result (anonymised statistics)**")
         st.dataframe(answer_to_frame(answer, (resp.get("query_plan") or {}).get("group_by", [])), hide_index=True, use_container_width=True)
         st.caption("Small-cell rule: counts below 10 are shown as `<10`; percentages and means based on fewer "
@@ -116,6 +126,8 @@ def show_response(resp, staff=False):
         st.caption("The data can only be analysed inside the secure processing environment. Downloads are blocked "
                    "(Art. 73). Only aggregated results may leave it after review.")
     for w in resp.get("warnings") or []:
+        if resp.get("withheld") and w.startswith("Results withheld:"):
+            continue
         st.caption(f"Note: {w}")
     st.caption(f"Processed in {resp.get('processing_time_s', 0):.3f} s")
     if staff:
@@ -124,17 +136,6 @@ def show_response(resp, staff=False):
             st.json({k: resp.get(k) for k in ("triggered_rules", "privacy_check", "spe") if k in resp})
             st.markdown("**Query plan generated from the request's definitions**")
             st.json(resp.get("query_plan") or {})
-
-
-_DISPLAY_TERMS = {
-    "copd": "COPD",
-    "egfr": "eGFR",
-    "hba1c": "HbA1c",
-}
-
-
-def _display_term(term):
-    return _DISPLAY_TERMS.get(term.casefold(), term[:1].upper() + term[1:])
 
 
 def _builder_concepts(data, kind, table=None):
@@ -165,7 +166,7 @@ def _builder_concepts(data, kind, table=None):
         )
         if not present:
             continue
-        display = _display_term(term)
+        display = display_name(term)
         label = f"{display} ({system} {', '.join(codes)})"
         unit = ""
         if kind == "observation":
@@ -247,6 +248,216 @@ def _builder_code_rows(items):
     return rows
 
 
+def _criterion_leaves(items):
+    leaves = []
+    has_group = False
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        if "items" in item:
+            has_group = True
+            nested, _ = _criterion_leaves(item.get("items"))
+            leaves.extend(nested)
+        else:
+            leaves.append(item)
+    return leaves, has_group
+
+
+def _matching_builder_option(options, codes, label=None):
+    codes = {str(code) for code in codes or []}
+    if codes:
+        for option in options:
+            if codes.intersection(str(code) for code in option.get("codes", [])):
+                return option
+    if label:
+        lowered = str(label).casefold()
+        for option in options:
+            if lowered in {
+                str(option.get("label", "")).casefold(),
+                str(option.get("term", "")).casefold(),
+                str(option.get("canonical", "")).casefold(),
+            }:
+                return option
+    return options[0] if options else None
+
+
+def _prefill_builder(criteria, applicant, purpose, request_type):
+    data = warm_data()
+    population = criteria.get("population", {})
+    items = population.get("items", []) if isinstance(population, dict) else []
+    leaves, has_nested_group = _criterion_leaves(items)
+    flat_any = (
+        isinstance(population, dict)
+        and str(population.get("match", "all")).casefold() == "any"
+    )
+    st.session_state["builder_match"] = (
+        "ANY of the criteria" if flat_any else "ALL of the criteria"
+    )
+    st.session_state["builder_criteria"] = []
+    st.session_state["builder_applicant_name"] = applicant.get("name", "")
+    st.session_state["builder_applicant_org"] = applicant.get("organisation", "")
+    st.session_state["builder_applicant_country"] = applicant.get("country", "AT")
+    st.session_state["builder_purpose"] = purpose
+    st.session_state["builder_request_type"] = request_type
+    st.session_state["builder_record_types"] = list(criteria.get("record_types", []))
+
+    starts = []
+    ends = []
+    for item in leaves:
+        for key in ("period_start", "onset_start"):
+            if item.get(key):
+                starts.append(int(str(item[key])[:4]))
+        for key in ("period_end", "onset_end"):
+            if item.get(key):
+                ends.append(int(str(item[key])[:4]))
+    for metric in criteria.get("metrics", []):
+        if metric.get("period_start"):
+            starts.append(int(str(metric["period_start"])[:4]))
+        if metric.get("period_end"):
+            ends.append(int(str(metric["period_end"])[:4]))
+    st.session_state["builder_from_year"] = min(starts) if starts else None
+    st.session_state["builder_to_year"] = max(ends) if ends else None
+
+    dimension_labels = {
+        "sex": "Sex",
+        "age_band": "Age band",
+        "region": "Region",
+        "data_holder": "Hospital",
+    }
+    group_by = criteria.get("group_by", [])
+    st.session_state["builder_group_by"] = [
+        dimension_labels[item["dimension"]]
+        for item in group_by
+        if item.get("dimension") in dimension_labels
+    ]
+    age_group = next(
+        (item for item in group_by if item.get("dimension") == "age_band"),
+        None,
+    )
+    if age_group:
+        bands = age_group.get("bands", [])
+        if bands == _age_bands("10-year bands", ""):
+            st.session_state["builder_age_band_preset"] = "10-year bands"
+        elif bands == _age_bands("18–39 / 40–64 / 65+", ""):
+            st.session_state["builder_age_band_preset"] = "18–39 / 40–64 / 65+"
+        else:
+            st.session_state["builder_age_band_preset"] = "Custom"
+            st.session_state["builder_custom_age_bands"] = ", ".join(
+                f"{band.get('lo')}-{band.get('hi')}"
+                if band.get("hi") is not None
+                else f"{band.get('lo')}+"
+                for band in bands
+            )
+
+    mean_metric = next(
+        (item for item in criteria.get("metrics", [])
+         if item.get("type") == "mean_latest_lab"),
+        None,
+    )
+    st.session_state["builder_mean_enabled"] = mean_metric is not None
+    if mean_metric:
+        mean_option = _matching_builder_option(
+            _builder_concepts(data, "observation"),
+            [mean_metric.get("loinc")],
+        )
+        if mean_option:
+            st.session_state["builder_mean_lab"] = mean_option["label"]
+
+    categories = {
+        "condition": ("Diagnosis", "condition", "icd10", "diagnosis"),
+        "medication": ("Medication", "medication", "atc", "medication"),
+        "lab": ("Laboratory measurement", "observation", "loinc", "lab"),
+        "age": ("Age", None, None, "age"),
+        "sex": ("Sex", None, None, "sex"),
+        "region": ("Region", None, None, "region"),
+        "data_holder": ("Hospital (data holder)", None, None, "data_holder"),
+        "hospital_stay": (
+            "Hospital stay (main diagnosis)",
+            "condition",
+            "icd10",
+            "hospital_stay",
+        ),
+    }
+    operator_labels = {
+        ">": "Greater than (>)",
+        ">=": "At least (≥)",
+        "<": "Less than (<)",
+        "<=": "At most (≤)",
+        "present": "Has a measurement",
+    }
+    medication_status_labels = {
+        "active": "Active on 31 Dec 2025 (default)",
+        "ever": "Ever prescribed",
+        "during_period": "Prescribed during the time period",
+    }
+
+    for index, item in enumerate(leaves, start=1):
+        kind = item.get("type")
+        if kind not in categories:
+            continue
+        category, option_kind, code_field, key_suffix = categories[kind]
+        row_id = index
+        st.session_state["builder_criteria"].append(
+            {"id": row_id, "category": category}
+        )
+        st.session_state["builder_next_criterion_id"] = row_id
+        st.session_state[f"builder_{row_id}_exclude"] = bool(item.get("exclude"))
+        if kind in {"condition", "medication", "lab", "hospital_stay"}:
+            table = "encounters" if kind == "hospital_stay" else None
+            options = _builder_concepts(data, option_kind, table)
+            codes = item.get(code_field, [])
+            if kind == "lab":
+                codes = [item.get("loinc", "")]
+            option = _matching_builder_option(options, codes, item.get("label"))
+            if option:
+                widget_key = {
+                    "condition": "diagnosis",
+                    "medication": "medication",
+                    "lab": "lab",
+                    "hospital_stay": "hospital_stay",
+                }[kind]
+                st.session_state[f"builder_{row_id}_{widget_key}"] = option["label"]
+        if kind == "condition":
+            if item.get("onset_start") and item.get("onset_end"):
+                timing = "Newly diagnosed within the time period"
+            elif item.get("onset_start"):
+                timing = "Diagnosed since the start of the time period"
+            elif item.get("onset_end"):
+                timing = "Diagnosed by the end of the time period"
+            else:
+                timing = "Diagnosed by 31 Dec 2025 (any time)"
+            st.session_state[f"builder_{row_id}_diagnosis_timing"] = timing
+        elif kind == "medication":
+            st.session_state[f"builder_{row_id}_medication_status"] = (
+                medication_status_labels.get(
+                    item.get("status"), "Active on 31 Dec 2025 (default)"
+                )
+            )
+        elif kind == "lab":
+            st.session_state[f"builder_{row_id}_lab_operator"] = operator_labels.get(
+                item.get("op"), "Has a measurement"
+            )
+            if item.get("loinc") and item.get("op") != "present":
+                st.session_state[
+                    f"builder_{row_id}_lab_value_{item['loinc']}"
+                ] = float(item.get("value", 0.0))
+        elif kind == "age":
+            st.session_state[f"builder_{row_id}_age_min_enabled"] = item.get("min") is not None
+            st.session_state[f"builder_{row_id}_age_max_enabled"] = item.get("max") is not None
+            if item.get("min") is not None:
+                st.session_state[f"builder_{row_id}_age_min"] = int(item["min"])
+            if item.get("max") is not None:
+                st.session_state[f"builder_{row_id}_age_max"] = int(item["max"])
+        elif kind == "sex":
+            st.session_state[f"builder_{row_id}_sex"] = item.get("value", "female")
+        elif kind == "region":
+            st.session_state[f"builder_{row_id}_region"] = list(item.get("values", []))
+        elif kind == "data_holder":
+            st.session_state[f"builder_{row_id}_data_holder"] = list(item.get("values", []))
+
+    return has_nested_group
+
+
 def _builder_criterion_row(row, data, period_start, period_end):
     row_id = row["id"]
     category = row["category"]
@@ -278,6 +489,8 @@ def _builder_criterion_row(row, data, period_start, period_end):
         timing_options = ["Diagnosed by 31 Dec 2025 (any time)"]
         if period_start and period_end:
             timing_options.append("Newly diagnosed within the time period")
+        elif period_start:
+            timing_options.append("Diagnosed since the start of the time period")
         if period_end:
             timing_options.append("Diagnosed by the end of the time period")
         timing = st.radio(
@@ -292,9 +505,11 @@ def _builder_criterion_row(row, data, period_start, period_end):
         }
         if timing == "Newly diagnosed within the time period":
             criterion.update({"onset_start": period_start, "onset_end": period_end})
+        elif timing == "Diagnosed since the start of the time period":
+            criterion["onset_start"] = period_start
         elif timing == "Diagnosed by the end of the time period":
             criterion["onset_end"] = period_end
-        if not period_end:
+        if not period_start and not period_end:
             st.caption("Set a time period above to enable diagnosis timing filters.")
     elif category == "Medication":
         options = _builder_concepts(data, "medication")
@@ -471,46 +686,187 @@ def _builder_criterion_row(row, data, period_start, period_end):
     return criterion
 
 
+def _criteria_period_summary(criteria):
+    population = criteria.get("population", {})
+    items = population.get("items", []) if isinstance(population, dict) else []
+    leaves, _ = _criterion_leaves(items)
+    bounds = []
+    for item in leaves:
+        start = item.get("period_start") or item.get("onset_start")
+        end = item.get("period_end") or item.get("onset_end")
+        if start or end:
+            bounds.append((start, end))
+    for metric in criteria.get("metrics", []):
+        start, end = metric.get("period_start"), metric.get("period_end")
+        if start or end:
+            bounds.append((start, end))
+    if not bounds:
+        return "No time period applied."
+    labels = []
+    for start, end in dict.fromkeys(bounds):
+        if start and end:
+            labels.append(f"{start} to {end}")
+        elif start:
+            labels.append(f"Since {start}")
+        else:
+            labels.append(f"Through {end}")
+    return "; ".join(labels)
+
+
 def page_applicant():
     st.header("Applicant portal")
     st.caption(PROTOTYPE_DISCLAIMER)
     examples = example_requests()
     describe_tab, builder_tab = st.tabs(["Describe your research", "Build your research cohort"])
     with describe_tab:
-        st.write("Definitions are optional; the built-in dictionary is used otherwise.")
-        with st.form("applicant_request_form"):
-            c1, c2, c3 = st.columns(3)
-            name = c1.text_input("Applicant name")
-            org = c2.text_input("Organisation")
-            country = c3.text_input("Country", "AT")
-            request_type = st.selectbox("Type of request", list(REQUEST_TYPES))
-            purpose = st.text_area("Purpose")
-            question = st.text_area("Question")
-            definitions = st.text_area(
-                "Definitions (one per line)",
-                height=150,
-                help="Optional. If omitted, the built-in terminology dictionary is used.",
+        st.write("Describe the research question you want answered.")
+        applicant_col1, applicant_col2, applicant_col3 = st.columns(3)
+        name = applicant_col1.text_input("Applicant name", key="nl_applicant_name")
+        organisation = applicant_col2.text_input(
+            "Organisation", key="nl_applicant_organisation"
+        )
+        country = applicant_col3.text_input("Country", "AT", key="nl_applicant_country")
+        purpose = st.text_area(
+            "Purpose *",
+            help="Checked against EHDS Art. 53/54",
+            key="nl_purpose",
+        )
+        request_type = st.selectbox(
+            "Type of request",
+            list(REQUEST_TYPES),
+            key="nl_request_type",
+        )
+        requested_as = REQUEST_TYPES[request_type]
+        record_types = []
+        if requested_as == "health data access application":
+            record_types = st.multiselect(
+                "Records to access in the SPE",
+                ["conditions", "medications", "observations", "encounters"],
+                help="The purpose must explain why anonymised statistics are not enough.",
+                key="nl_record_types",
             )
-            submit_form = st.form_submit_button("Submit request", type="primary")
-        if submit_form:
-            requested_as = REQUEST_TYPES[request_type]
-            request = {
-                "id": st.session_state.get("form_id", "NEW-1"),
-                "applicant": {"name": name, "organisation": org, "country": country},
-                "requested_as": requested_as,
-                "requested_format": (
-                    "anonymised statistics"
-                    if requested_as == "health data request"
-                    else "pseudonymised records"
-                ),
-                "purpose": purpose,
-                "question": question,
-                "definitions": [d.strip() for d in definitions.splitlines() if d.strip()],
+        question = st.text_area(
+            "Research question",
+            placeholder=(
+                "Compare HbA1c levels between male and female patients with "
+                "type 2 diabetes aged 40-65 during 2025."
+            ),
+            key="nl_question",
+        )
+        if st.button("Interpret my question", key="nl_interpret"):
+            st.session_state["nl_interpretation"] = interpret_question(question)
+            st.session_state["nl_interpreted_text"] = question
+
+        interpretation = st.session_state.get("nl_interpretation")
+        if interpretation is not None:
+            criteria = interpretation.criteria
+            criteria["record_types"] = record_types
+            st.subheader("Interpretation")
+            description = describe_criteria(criteria)
+            metric_labels = [
+                metric.get("label")
+                for metric in criteria.get("metrics", [])
+                if metric.get("label")
+            ]
+            if metric_labels:
+                description += " Outputs: " + ", ".join(metric_labels) + "."
+            st.info(description)
+            code_rows = _builder_code_rows(
+                criteria.get("population", {}).get("items", [])
+            )
+            if code_rows:
+                st.table(pd.DataFrame(code_rows))
+
+            group_labels = {
+                "sex": "Sex",
+                "age_band": "Age band",
+                "region": "Region",
+                "data_holder": "Hospital",
             }
-            with st.spinner("Assessing request..."):
-                resp = process_request(request)
-            store(resp)
-            st.session_state["last"] = resp["request_id"]
+            groups = [
+                group_labels.get(item.get("dimension"), item.get("dimension"))
+                for item in criteria.get("group_by", [])
+            ]
+            outputs = [
+                item.get("label", item.get("type", "Output"))
+                for item in criteria.get("metrics", [])
+            ]
+            st.markdown(f"**Time period:** {_criteria_period_summary(criteria)}")
+            st.markdown(
+                f"**Grouping:** {', '.join(groups) if groups else 'No grouping'}"
+            )
+            st.markdown(f"**Outputs:** {', '.join(outputs)}")
+            st.markdown("**Assumptions and documented defaults**")
+            if interpretation.assumptions:
+                for assumption in interpretation.assumptions:
+                    st.markdown(f"- {assumption}")
+            else:
+                st.write("No additional assumptions or defaults applied.")
+            if interpretation.unrecognised:
+                st.warning(
+                    "Not recognised (not used): "
+                    + ", ".join(interpretation.unrecognised)
+                )
+            if not interpretation.ok():
+                st.error(
+                    "Nothing clinical or demographic was recognised. Please "
+                    "refine the question or use the cohort builder."
+                )
+            if st.session_state.get("nl_interpreted_text") != question:
+                st.caption("Edit the question and interpret it again before submitting.")
+
+            submit_col, correct_col = st.columns(2)
+            if submit_col.button(
+                "Confirm and submit",
+                key="nl_submit",
+                type="primary",
+                disabled=(
+                    not interpretation.ok()
+                    or not purpose.strip()
+                    or st.session_state.get("nl_interpreted_text") != question
+                ),
+            ):
+                request_number = st.session_state.get("nl_request_number", 0) + 1
+                request = {
+                    "id": f"NL-{request_number}",
+                    "applicant": {
+                        "name": name,
+                        "organisation": organisation,
+                        "country": country,
+                    },
+                    "requested_as": requested_as,
+                    "requested_format": (
+                        "anonymised statistics"
+                        if requested_as == "health data request"
+                        else "pseudonymised records"
+                    ),
+                    "purpose": purpose,
+                    "question": st.session_state.get("nl_interpreted_text", question),
+                    "definitions": criteria_to_definitions(criteria),
+                    "criteria": criteria,
+                }
+                with st.spinner("Assessing request..."):
+                    resp = process_request(request)
+                store(resp)
+                st.session_state["last"] = resp["request_id"]
+                st.session_state["nl_request_number"] = request_number
+            if correct_col.button("Correct in cohort builder", key="nl_correct"):
+                nested = _prefill_builder(
+                    criteria,
+                    {
+                        "name": name,
+                        "organisation": organisation,
+                        "country": country,
+                    },
+                    purpose,
+                    request_type,
+                )
+                st.success("Loaded into the cohort builder tab — open it to edit.")
+                if nested:
+                    st.caption(
+                        "Nested groups cannot be edited in the cohort builder yet; "
+                        "use Confirm and submit to preserve the interpretation."
+                    )
 
     with builder_tab:
         data = warm_data()
@@ -734,7 +1090,12 @@ def page_applicant():
     with st.expander("Advanced options", expanded=False):
         source = st.radio(
             "Request source",
-            ["Example request", "Upload JSON", "Paste JSON"],
+            [
+                "Example request",
+                "Upload JSON",
+                "Paste JSON",
+                "Fill in a form (challenge format)",
+            ],
             horizontal=True,
         )
         request = None
@@ -761,7 +1122,57 @@ def page_applicant():
                     request = json.loads(txt)
                 except json.JSONDecodeError as e:
                     st.error(f"Invalid JSON: {e}")
-        if request and st.button("Submit this request", type="primary"):
+        elif source == "Fill in a form (challenge format)":
+            with st.form("advanced_challenge_form"):
+                form_col1, form_col2, form_col3 = st.columns(3)
+                form_name = form_col1.text_input("Applicant name")
+                form_org = form_col2.text_input("Organisation")
+                form_country = form_col3.text_input("Country", "AT")
+                form_request_type = st.selectbox(
+                    "Type of request", list(REQUEST_TYPES)
+                )
+                form_purpose = st.text_area("Purpose")
+                form_question = st.text_area("Question")
+                form_definitions = st.text_area(
+                    "Definitions (one per line)",
+                    height=150,
+                    help="Optional. If omitted, the built-in terminology dictionary is used.",
+                )
+                submit_challenge = st.form_submit_button(
+                    "Submit this request", type="primary"
+                )
+            if submit_challenge:
+                form_requested_as = REQUEST_TYPES[form_request_type]
+                request = {
+                    "id": st.session_state.get("form_id", "NEW-1"),
+                    "applicant": {
+                        "name": form_name,
+                        "organisation": form_org,
+                        "country": form_country,
+                    },
+                    "requested_as": form_requested_as,
+                    "requested_format": (
+                        "anonymised statistics"
+                        if form_requested_as == "health data request"
+                        else "pseudonymised records"
+                    ),
+                    "purpose": form_purpose,
+                    "question": form_question,
+                    "definitions": [
+                        definition.strip()
+                        for definition in form_definitions.splitlines()
+                        if definition.strip()
+                    ],
+                }
+                with st.spinner("Assessing request..."):
+                    resp = process_request(request)
+                store(resp)
+                st.session_state["last"] = resp["request_id"]
+        if (
+            source != "Fill in a form (challenge format)"
+            and request
+            and st.button("Submit this request", type="primary")
+        ):
             with st.spinner("Assessing request..."):
                 resp = process_request(request)
             store(resp)

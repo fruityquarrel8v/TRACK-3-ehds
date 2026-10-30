@@ -376,6 +376,14 @@ def _codes_text(codes):
     return ", ".join(str(code) for code in (codes or []))
 
 
+def _format_date(value):
+    try:
+        parsed = date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{parsed.day} {parsed.strftime('%B %Y')}"
+
+
 def _period_text(start, end):
     if not start and not end:
         return ""
@@ -394,8 +402,25 @@ def _describe_leaf(item):
     if kind == "condition":
         codes = _codes_text(item.get("icd10"))
         result = "with " + label + (f" (ICD-10 {codes})" if codes else "")
-        if item.get("onset_start") or item.get("onset_end"):
-            result += _period_text(item.get("onset_start"), item.get("onset_end"))
+        onset_start = item.get("onset_start")
+        onset_end = item.get("onset_end")
+        onset_start_text = str(onset_start) if onset_start else None
+        onset_end_text = str(onset_end) if onset_end else None
+        if onset_start_text and onset_end_text:
+            if (
+                onset_start_text == f"{onset_start_text[:4]}-01-01"
+                and onset_end_text == f"{onset_start_text[:4]}-12-31"
+            ):
+                result += f" newly diagnosed in {onset_start_text[:4]}"
+            else:
+                result += (
+                    f" newly diagnosed from {_format_date(onset_start_text)}"
+                    f" to {_format_date(onset_end_text)}"
+                )
+        elif onset_end_text:
+            result += f" diagnosed on or before {_format_date(onset_end_text)}"
+        elif onset_start_text:
+            result += f" diagnosed since {_format_date(onset_start_text)}"
         return result
     if kind == "medication":
         codes = _codes_text(item.get("atc"))

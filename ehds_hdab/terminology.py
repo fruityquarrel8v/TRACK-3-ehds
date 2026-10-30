@@ -59,6 +59,25 @@ _CODES = {
     "oral anticoagulant": ("B01AA", "B01AF"),
 }
 
+_DISPLAY_NAMES = {
+    "copd": "COPD",
+    "hba1c": "HbA1c",
+    "bmi": "BMI",
+    "egfr": "eGFR",
+    "lama": "LAMA",
+    "ssri": "SSRI",
+    "doac": "DOAC",
+    "arb": "ARB",
+    "ace inhibitor": "ACE inhibitor",
+    "sglt2 inhibitor": "SGLT2 inhibitor",
+    "glp-1 receptor agonist": "GLP-1 receptor agonist",
+}
+
+
+def display_name(term):
+    value = str(term or "")
+    return _DISPLAY_NAMES.get(value.casefold(), value[:1].upper() + value[1:])
+
 
 def normalize(term):
     value = unicodedata.normalize("NFKC", str(term)).casefold()

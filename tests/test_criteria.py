@@ -524,6 +524,35 @@ def test_describe_criteria_includes_labels_codes_and_exclusion():
     assert "without" in description
 
 
+def test_describe_condition_onset_timing_with_human_readable_dates():
+    cases = [
+        (
+            {"onset_start": "2025-01-01", "onset_end": "2025-12-31"},
+            "newly diagnosed in 2025",
+        ),
+        (
+            {"onset_start": "2023-01-01", "onset_end": "2024-12-31"},
+            "newly diagnosed from 1 January 2023 to 31 December 2024",
+        ),
+        (
+            {"onset_end": "2025-12-31"},
+            "diagnosed on or before 31 December 2025",
+        ),
+        (
+            {"onset_start": "2024-01-01"},
+            "diagnosed since 1 January 2024",
+        ),
+    ]
+    for timing, expected in cases:
+        description = describe_criteria(_criteria([{
+            "type": "condition",
+            "label": "Depression",
+            "icd10": ["F32"],
+            **timing,
+        }]))
+        assert expected in description
+
+
 def test_describe_lab_without_unit_and_hospital_stay_without_diagnosis():
     criteria = _criteria([
         {

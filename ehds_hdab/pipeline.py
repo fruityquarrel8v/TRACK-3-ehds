@@ -4,11 +4,29 @@ import time
 from .audit import audit_event
 from .data import load_data
 from .decision import decide
-from .engine import execute
+from .engine import execute, population_patient_ids
 from .parser import parse_request
 from .plan import QueryPlan
 from .privacy import apply_small_cell, check_statistical_output
 from .spe import create_workspace
+
+
+_QUERY_HISTORY = {}
+
+
+def reset_query_history():
+    _QUERY_HISTORY.clear()
+
+
+def _applicant_key(request):
+    applicant = request.get("applicant")
+    if not isinstance(applicant, dict):
+        return None
+    name = str(applicant.get("name") or "").strip()
+    organisation = str(applicant.get("organisation") or "").strip()
+    if not name and not organisation:
+        return None
+    return f"{name}|{organisation}".casefold()
 
 
 def _condition_source_warnings(plan, data):
@@ -70,6 +88,7 @@ def process_request(request):
         spe_info = None
         warnings = []
         privacy_check = None
+        withheld = False
     else:
         plan = parse_request(request)
         for warning in _condition_source_warnings(plan, data):
@@ -78,6 +97,29 @@ def process_request(request):
         warnings = list(plan.warnings)
         if not decision.purpose_category:
             warnings.append("Purpose was not matched to a specific Art. 53 category.")
+        withheld = False
+        if decision.decision == "APPROVE_STATISTICAL" and plan.cohort:
+            applicant_key = _applicant_key(request)
+            if applicant_key is not None:
+                cohort_ids = frozenset(population_patient_ids(plan.cohort, plan, data))
+                history = _QUERY_HISTORY.setdefault(applicant_key, [])
+                for earlier_request, earlier_ids in history:
+                    difference = len(cohort_ids.symmetric_difference(earlier_ids))
+                    if 0 < difference < 10:
+                        withheld = True
+                        warnings.append(
+                            f"Results withheld: this population differs from your earlier "
+                            f"request {earlier_request} by fewer than 10 patients, which "
+                            "could reveal individuals by subtraction (differencing). "
+                            "Staff review required."
+                        )
+                        audit_event(
+                            "differencing_withheld",
+                            request.get("id"),
+                            {"earlier_request": earlier_request},
+                        )
+                        break
+                history.append((request.get("id"), cohort_ids))
         if decision.decision == "APPROVE_SPE":
             spe_info = create_workspace(
                 request.get("id", "unknown"),
@@ -89,9 +131,14 @@ def process_request(request):
             answer = {"cohort_size": spe_info["cohort_size"]}
             privacy_check = None
         else:
-            raw = execute(plan, data)
-            answer = apply_small_cell(raw)
-            privacy_check = {"passed": not check_statistical_output(answer), "violations": check_statistical_output(answer)}
+            if withheld:
+                answer = None
+                privacy_check = {"passed": True, "violations": []}
+            else:
+                raw = execute(plan, data)
+                answer = apply_small_cell(raw)
+                violations = check_statistical_output(answer)
+                privacy_check = {"passed": not violations, "violations": violations}
             if plan.patient_level_listing:
                 warnings.append("Patient-level listings are not provided in statistical answers.")
             spe_info = None
@@ -112,6 +159,7 @@ def process_request(request):
         "needs_staff_review": needs_staff_review,
         "processing_time_s": time.perf_counter() - started,
         **({"privacy_check": privacy_check} if privacy_check is not None else {}),
+        **({"withheld": True} if withheld else {}),
     }
     audit_event(
         "request_processed",
