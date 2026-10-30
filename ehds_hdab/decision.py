@@ -40,9 +40,11 @@ def _prohibited(request):
     if credit_context and credit_decision:
         return "insurance_credit"
     audience = re.search(
-        r"\b(?:prescrib\w*|gps?\b|physician\w*|doctors?\b|consumers?\b|customers?\b)\b",
+        r"\b(?:prescrib\w*|gps?\b|physician\w*|doctors?\b|consumers?\b|customers?\b|residents?\b|households?\b|"
+        r"people\b|individuals?\b|patients?\b|population\b)\b",
         text,
     )
+    marketing_organisation = re.search(r"\b(?:marketing|advertising)\s+(?:company|agency|firm|department)\b", text)
     sales_representatives = re.search(
         r"\bsales\s+(?:representatives?|reps?|team|force|department)\b|"
         r"\b(?:our|medical|pharma\w*)\s+reps?\b",
@@ -51,7 +53,8 @@ def _prohibited(request):
     marketing_language = re.search(
         r"\b(?:for|our|its|their)\s+(?:\w+\s+){0,2}(?:marketing|advertising)\b|"
         r"\b(?:marketing|advertising)\s+(?:purposes?|materials?|to|of\s+(?:our|its|their))\b|"
-        r"\badvertis(?:e|ing)\s+(?:our|its|their|the|a|new)\b",
+        r"\badvertis(?:e|ing)\s+(?:our|its|their|the|a|new)\b|"
+        r"\badvertis(?:ements?|ing)\s+(?:for|of)\s+(?:\w+[- ])?(?:products?|services?|medicines?|drugs?|brands?|supplements?)\b",
         text,
     )
     nonmarketing_reference = re.search(
@@ -82,6 +85,7 @@ def _prohibited(request):
         or (marketing_language and not nonmarketing_reference)
         or (sales_representatives and audience)
         or targeted_commercially
+        or (marketing_organisation and re.search(r"\btarget\w*\b", text))
     ):
         return "advertising_marketing"
     employment_context = re.search(

@@ -22,6 +22,8 @@ _TERMS = {
         "obesity": ("E66",),
         "breast cancer": ("C50",),
         "stroke": ("I63", "cerebral infarction"),
+        "cardiovascular disease": ("I20", "cvd", "cardiovascular diseases", "cardiovascular events",
+                                   "heart and circulatory disease"),
         "chronic kidney disease": ("N18", "ckd"),
         "pneumonia": ("J18",),
         "hip fracture": ("S72", "femur fracture"),
@@ -57,6 +59,10 @@ _TERMS = {
 
 _CODES = {
     "oral anticoagulant": ("B01AA", "B01AF"),
+    # Ischaemic heart disease, atrial fibrillation, heart failure and cerebrovascular disease; hypertension (I10)
+    # is deliberately excluded as a risk factor rather than a cardiovascular event.
+    "cardiovascular disease": ("I20", "I21", "I22", "I23", "I24", "I25", "I48", "I50", "I60", "I61", "I62", "I63",
+                               "I64", "I65", "I66", "I67", "I68", "I69"),
 }
 
 _DISPLAY_NAMES = {

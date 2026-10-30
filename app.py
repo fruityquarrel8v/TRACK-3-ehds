@@ -1175,6 +1175,21 @@ def _draft():
     return st.session_state.setdefault("draft", {})
 
 
+APPLICANT_IDENTITY_KEYS = ("review_name", "review_org", "review_country",
+                           "builder_applicant_name", "builder_applicant_org", "builder_applicant_country")
+
+
+def _start_new_request():
+    """Forget everything specific to the previous request (draft, clarification answers, declared purpose, access
+    type, record types, last decision). Only the applicant's identity (name, organisation, country) is kept."""
+    for key in list(st.session_state.keys()):
+        if not isinstance(key, str) or key in APPLICANT_IDENTITY_KEYS:
+            continue
+        if key.startswith(("review_", "clarify_", "builder_", "guided_")) or key in ("draft", "last"):
+            st.session_state.pop(key, None)
+    st.session_state["draft"] = {}
+
+
 def _escape(text):
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -1323,12 +1338,22 @@ def _interpretation_rows(criteria):
         analysis = "Statistical comparison: " + ", ".join(m.get("label", "mean") for m in means)
         if not group_by:
             analysis = "Mean values: " + ", ".join(m.get("label", "mean") for m in means)
+    elif any(m.get("type") == "percentage" for m in metrics):
+        analysis = "Patient counts and prevalence (%)" + (" per group" if group_by else "")
     else:
         analysis = "Patient counts" + (" per group" if group_by else "")
     rows.append(("Analysis", analysis, "Counts below 10 are hidden; averages need at least 10 patients"))
     record_types = criteria.get("record_types", []) if isinstance(criteria, dict) else []
     if record_types:
         rows.append(("Records requested", ", ".join(record_types), "Only inside a secure processing environment"))
+    if isinstance(criteria, dict) and criteria.get("access_hint") == "health data access application":
+        rows.append(("Access requested", "Pseudonymised records in a secure processing environment",
+                     "Taken from your question; confirm on the review screen"))
+    elif isinstance(criteria, dict) and criteria.get("access_hint") == "health data request":
+        rows.append(("Access requested", "Anonymised statistics", "Taken from your question"))
+    if isinstance(criteria, dict) and criteria.get("purpose_hint"):
+        rows.append(("Purpose (from your question)", criteria["purpose_hint"],
+                     "Pre-filled as your declared purpose; please check and complete it on the review screen"))
     return rows
 
 
@@ -1393,6 +1418,7 @@ def _screen_welcome(examples):
             st.warning("Please describe what you would like to research, or pick an example below.")
         else:
             interpretation = interpret_question(question)
+            _start_new_request()
             st.session_state["draft"] = {
                 "question": question, "criteria": interpretation.criteria,
                 "assumptions": list(interpretation.assumptions),
@@ -1407,11 +1433,13 @@ def _screen_welcome(examples):
     with st.container(key="example_chips"):
         for col, (label, text) in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
             if col.button(label, key=f"example_{_slug_key(label)}", width="stretch"):
+                _start_new_request()
                 st.session_state["pending_question"] = text
                 _go("welcome")
     st.markdown("")
     st.markdown("**Prefer step-by-step guidance?**")
     if st.button("Build your research request step by step", key="start_guided"):
+        _start_new_request()
         st.session_state["guided_step"] = 1
         _go("guided")
     st.markdown(
@@ -1544,8 +1572,15 @@ def _screen_review():
     name = c1.text_input("Your name", key="review_name")
     org = c2.text_input("Organisation", key="review_org")
     country = c3.text_input("Country", "AT", key="review_country")
+    if "review_purpose" not in st.session_state and criteria.get("purpose_hint"):
+        st.session_state["review_purpose"] = criteria["purpose_hint"]
+    if "review_request_type" not in st.session_state and criteria.get("access_hint") in REQUEST_TYPES.values():
+        st.session_state["review_request_type"] = next(k for k, v in REQUEST_TYPES.items() if v == criteria["access_hint"])
     purpose = st.text_area("Research purpose", key="review_purpose",
                            placeholder="e.g. Public-health research on diabetes care quality to plan prevention programmes.")
+    if criteria.get("purpose_hint") and purpose.strip() == criteria["purpose_hint"].strip():
+        st.caption("Pre-filled from your question. Please check it states a permitted purpose and what the results "
+                   "will be used for; it is assessed exactly as written here.")
     st.caption("Say which permitted purpose applies (scientific research, public health, policy-making, official "
                "statistics, teaching, training or testing an algorithm, improving care) and what the results will be "
                "used for. A purpose that cannot be matched is put on hold for staff assessment and releases nothing.")
@@ -1558,8 +1593,26 @@ def _screen_review():
                                       key="review_record_types")
         st.caption("Explain in the purpose why anonymised statistics are not enough (e.g. training a prediction "
                    "model on individual histories). Otherwise the request is downgraded to statistics.")
-    criteria = dict(criteria)
+    criteria = {k: v for k, v in criteria.items() if k not in ("access_hint", "purpose_hint")}
     criteria["record_types"] = record_types
+    request = {
+        "applicant": {"name": name, "organisation": org, "country": country},
+        "requested_as": requested_as,
+        "requested_format": "anonymised statistics" if requested_as == "health data request"
+        else "pseudonymised records",
+        "purpose": purpose,
+        "question": draft.get("question") or describe_criteria(criteria),
+        "definitions": criteria_to_definitions(criteria),
+        "criteria": criteria,
+    }
+    _card("What will be assessed", [
+        ("Research question", request["question"], ""),
+        ("Applicant", f"{name or '—'}, {org or '—'} ({country or '—'})", "Identity is kept between requests"),
+        ("Declared purpose", purpose or "— (required)", "Checked against Art. 53 (permitted) and Art. 54 (prohibited)"),
+        ("Access requested", request_type + (f" — records: {', '.join(record_types)}" if record_types else ""), ""),
+        ("Interpreted as", describe_criteria(criteria), ""),
+    ])
+    st.caption("The decision is made on exactly these values; nothing from an earlier request is reused.")
     b1, b2, b3 = st.columns([1.4, 1, 1])
     if b1.button("Submit research request", type="primary", key="review_submit", width="stretch"):
         missing = [label for label, value in (("your name", name), ("organisation", org), ("research purpose", purpose))
@@ -1570,17 +1623,7 @@ def _screen_review():
             number = st.session_state.get("flow_request_number", 0) + 1
             st.session_state["flow_request_number"] = number
             prefix = "GUIDED" if draft.get("source") == "guided" else "NL"
-            request = {
-                "id": f"{prefix}-{number}",
-                "applicant": {"name": name, "organisation": org, "country": country},
-                "requested_as": requested_as,
-                "requested_format": "anonymised statistics" if requested_as == "health data request"
-                else "pseudonymised records",
-                "purpose": purpose,
-                "question": draft.get("question") or describe_criteria(criteria),
-                "definitions": criteria_to_definitions(criteria),
-                "criteria": criteria,
-            }
+            request = {"id": f"{prefix}-{number}", **request}
             with st.spinner("Assessing your request..."):
                 resp = process_request(request)
             store(resp, request)
@@ -1624,7 +1667,7 @@ def _screen_result():
         with st.expander("How this was defined", expanded=False):
             _card("Definitions used", _interpretation_rows(request["criteria"]))
     if st.button("Ask another question", key="result_new"):
-        st.session_state["draft"] = {}
+        _start_new_request()
         st.session_state["pending_question"] = ""
         _go("welcome")
 

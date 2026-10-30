@@ -22,7 +22,9 @@ _STOPWORDS = {
     "measurement", "measurements", "men", "never", "new", "newly", "no", "not",
     "number", "of", "on", "or", "overall", "older", "over", "patients",
     "per", "period", "people", "prescribed", "prescription", "prevalence",
-    "region", "regions", "results", "sex", "show", "since", "stay", "stays",
+    "region", "regions", "regional", "results", "sex", "show", "since", "stay", "stays",
+    "highest", "lowest", "austrian", "austria", "identify", "which", "access", "require", "required", "requires",
+    "hospital", "hospitals", "most", "fewest", "estimate", "researchers", "university", "studying", "analysis",
     "plot", "receiving", "receive", "taking", "take", "takes", "took", "the",
     "there", "those", "threshold", "time", "to", "trend", "trends",
     "under", "use", "used", "uses", "using", "value", "values", "was",
@@ -374,7 +376,19 @@ YEARLY_ASSUMPTION = (
 )
 
 
-_PREVALENCE = re.compile(r"\bprevalen(?:ce|t)\b|\bproportion\s+of\b|\bpercentage\s+of\b|\bshare\s+of\b", re.I)
+_PREVALENCE = re.compile(r"\bprevalen(?:ce|t)\b|\bproportion\s+of\b|\bpercentage\s+of\b|\bshare\s+of\b|"
+                         r"\brates?\s+of\b|\b(?:highest|lowest)\s+rates?\b", re.I)
+_ACCESS_SPE = re.compile(r"\b(?:pseudonymi[sz]ed(?:\s+\w+)?\s+(?:records?|data)|individual[- ]level(?:\s+\w+)?\s*(?:records?|data)?|"
+                         r"patient[- ]level(?:\s+\w+)?\s*(?:records?|data)?|record[- ]level\s+data|secure\s+processing\s+environment|"
+                         r"\bspe\b|microdata|raw\s+data)\b", re.I)
+_ACCESS_STATS = re.compile(r"\b(?:anonymi[sz]ed\s+(?:statistics|counts|data)|aggregated?\s+(?:statistics|data|results|counts)|"
+                           r"summary\s+statistics|statistics\s+only)\b", re.I)
+_PURPOSE_CUE = re.compile(r"\b(?:we\s+(?:are|want|would\s+like|plan|intend|aim|need|require)|so\s+that|in\s+order\s+to|"
+                          r"our\s+(?:aim|goal|objective|company|team)|purpose|study(?:ing)?|research\w*|to\s+(?:inform|plan|improve|evaluate)|"
+                          r"project|company|university|ministry|insur\w+|hospital\s+management)\b", re.I)
+_UNSUPPORTED_ANALYSIS = re.compile(r"\b(?:odds\s+ratios?|hazard\s+ratios?|relative\s+risks?|regression|survival\s+analys\w+|"
+                                   r"kaplan|cox\s+model|predict\w*|risk\s+(?:factors?|scores?|model\w*)|causal\w*|"
+                                   r"incidence\s+rate\s+ratios?|correlation\s+coefficients?|propensity)\b", re.I)
 _INCIDENCE = re.compile(r"\bincidence\b|\bnew\s+cases\b|\bnewly\s+(?:diagnosed|recorded)\b", re.I)
 _STAYS_COUNTED = re.compile(r"\b(?:hospitali[sz]ations?|admissions?|inpatient\s+stays?|hospital\s+stays?)\b", re.I)
 _DISTRIBUTION = re.compile(r"\bdistribution\s+of\b|\bhistogram\s+of\b", re.I)
@@ -474,6 +488,17 @@ def _measure_metrics(text, nodes, metrics, assumptions, periods):
 _HOSPITALISED_FOR = re.compile(r"\b(?:hospitali[sz]ed|admitted)\s+(?:for|with|because)\b", re.I)
 
 
+_REGION_GROUP = re.compile(
+    r"\b(?:by\s+region|per\s+region|in\s+each\s+region|across\s+regions|between\s+regions|"
+    r"regions?\s+with\s+the\s+(?:highest|lowest|most|fewest|greatest|largest|smallest)|"
+    r"(?:which|what|identify|compare|comparing|rank)\b[^.;?]{0,40}\bregions|"
+    r"regional\s+(?:differences?|comparison|variation|distribution|rates?|breakdown|pattern))\b", re.I)
+_HOSPITAL_GROUP = re.compile(
+    r"\b(?:by\s+hospital|per\s+hospital|in\s+each\s+hospital|across\s+hospitals|between\s+hospitals|"
+    r"hospitals?\s+with\s+the\s+(?:highest|lowest|most|fewest|greatest|largest|smallest)|"
+    r"(?:which|what|identify|compare|comparing|rank)\b[^.;?]{0,40}\bhospitals)\b", re.I)
+
+
 def _grouping(text, assumptions):
     groups = []
     if TREND_WORDS.search(text):
@@ -486,9 +511,9 @@ def _grouping(text, assumptions):
         assumptions.append("Age-band results use 10-year bands.")
     if re.search(r"\b(?:by\s+sex|by\s+gender)\b", text, re.I):
         groups.append({"dimension": "sex"})
-    if re.search(r"\b(?:by\s+region|per\s+region|in\s+each\s+region|across\s+regions)\b", text, re.I):
+    if _REGION_GROUP.search(text):
         groups.append({"dimension": "region"})
-    if re.search(r"\b(?:by\s+hospital|per\s+hospital|in\s+each\s+hospital|across\s+hospitals)\b", text, re.I):
+    if _HOSPITAL_GROUP.search(text):
         groups.append({"dimension": "data_holder"})
     unique = []
     for group in groups:
@@ -642,6 +667,41 @@ def _review_interpretation(text, criteria, unrecognised, assumptions):
             ],
             "note": "Counts are unique patients; the number of stays is not available in this flow.",
         })
+    for match in _UNSUPPORTED_ANALYSIS.finditer(lowered):
+        problems.append(
+            f"This prototype computes counts, prevalence or shares (%) and mean laboratory values per group; it cannot "
+            f"run \u201c{match.group(0)}\u201d. Ask for counts, percentages, means or yearly trends instead, or request "
+            "pseudonymised records in a secure processing environment for your own analysis.")
+        break
+    relationship = _RELATIONSHIP.search(text)
+    stratified = any(m.get("stratify") for m in criteria.get("metrics", []) or [])
+    if relationship and not stratified:
+        generic_pending = bool(_GENERIC_DIABETES.search(lowered)) and not any(
+            "E11" in item.get("icd10", []) for item in conditions)
+        if len(conditions) + int(generic_pending) >= 2:
+            names = " and ".join([item["label"] for item in conditions] + (["Type 2 diabetes"] if generic_pending else []))
+            clarifications.append({
+                "id": "relationship_conditions",
+                "question": f"A relationship between {names} can only be shown here in aggregate form. What would you like?",
+                "options": [
+                    (f"Count patients who have both ({names}); add 'by region', 'by sex' or 'over time' for a comparison", {}),
+                    ("Something else \u2014 let me rephrase (or request pseudonymised records in a secure processing "
+                     "environment for a patient-level analysis)", {"stop": True}),
+                ],
+                "note": "Co-occurrence counts are descriptive; they are not evidence of association or causation.",
+            })
+        else:
+            problems.append("A relationship analysis needs two conditions or two laboratory measurements that I "
+                            "recognise (e.g. 'relationship between BMI and HbA1c', 'relationship between type 2 "
+                            "diabetes and heart failure').")
+        unrecognised[:] = [w for w in unrecognised if w not in ("relationship", "association", "correlation", "relation")]
+    if "rate" in unrecognised or "rates" in unrecognised:
+        if any(item.get("type") == "hospital_stay" for item in leaves):
+            assumptions.append("'Rates' are shown as counts of stays and of patients per group; population-based rates "
+                               "per 1,000 inhabitants are not available in this prototype.")
+            unrecognised[:] = [w for w in unrecognised if w not in ("rate", "rates")]
+        elif not conditions:
+            problems.append("'Rates' need a condition to count (e.g. 'rates of obesity by region' is shown as prevalence %).")
     if _INJECTION.search(text):
         assumptions.append("Instructions contained in the question (e.g. to ignore rules or approve automatically) "
                            "were ignored: the question is treated as data, never as a command.")
@@ -863,6 +923,20 @@ def interpret_question(text: str) -> Interpretation:
         "metrics": metrics,
         "record_types": [],
     }
+    spe_match = _ACCESS_SPE.search(text)
+    if spe_match:
+        criteria["access_hint"] = "health data access application"
+        recognised_spans.extend(m.span() for m in _ACCESS_SPE.finditer(text))
+        assumptions.append("Your question asks for pseudonymised, patient-level records: the request is prepared as a "
+                           "health data access application (secure processing environment). You can change this on "
+                           "the review screen; the purpose must explain why statistics are not enough.")
+    elif _ACCESS_STATS.search(text):
+        criteria["access_hint"] = "health data request"
+        recognised_spans.extend(m.span() for m in _ACCESS_STATS.finditer(text))
+    purpose_sentences = [part.strip() for part in re.split(r"(?<=[.!?;])\s+", text)
+                         if part.strip() and _PURPOSE_CUE.search(part)]
+    if purpose_sentences:
+        criteria["purpose_hint"] = " ".join(purpose_sentences)
     for period_start, period_end, _ in periods:
         recognised_spans.append((period_start, period_end))
     unrecognised = _unrecognised_tokens(text, recognised_spans)
