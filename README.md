@@ -1,4 +1,6 @@
-# Intelligent Health Data Access Gateway
+# HealthCare Rocket 🚀
+
+**As fast as a rocket. Without the complexity.**
 
 **An AI-assisted EHDS research gateway that interprets health-data requests, calculates trustworthy statistics and prevents unsafe disclosures.**
 
@@ -199,7 +201,7 @@ data.py (pandas, opted-out patients removed from all 5 tables at load time)
 - **Privacy as the last step.** All numbers pass through one small-cell function and an output check before anyone sees them. Charts are drawn only from that suppressed table, never from patient records.
 - **Clinician-reviewed interpretation rules** (documented defaults, shown to the researcher): "hospitalised for X" = inpatient stay with X as main diagnosis; a medication without a stated status = active on 31 Dec 2025 (+ staff warning); a condition named without a code = diagnosis code only; conditions that exist only as hospital main diagnoses are counted from the diagnosis list with a staff warning; "diagnosed/new cases in YYYY" = onset in YYYY, "had X in YYYY" = diagnosed by 31 Dec YYYY; a lab threshold uses each patient's latest value within the period (latest overall if none).
 - **No LLM anywhere.** The "automatic interpretation" of questions and chart commands is rule-based, so it only understands concepts in the built-in dictionary; everything else is reported as not recognised.
-- **One design system.** All colours live in `ehds_hdab/theme.py` (pink `#C44779` for actions and selected states, lavender `#B9A5F5` for information, midnight navy `#182342` for text, blush `#FFF6FA` background, white cards; green/amber/red kept for approved/review/rejected so status never relies on pink alone). The Streamlit CSS, the Altair charts and `.streamlit/config.toml` read from it; styling never touches the calculations.
+- **One design system.** All colours live in `ehds_hdab/theme.py` (rose pink `#E77FA8` as the brand colour for buttons, borders and selected states, dark navy `#1C2844` for text, white surfaces, turquoise `#78D5D0` only as a thin accent; green/amber/red kept for approved/review/rejected so status never relies on pink alone). The Streamlit CSS, the Altair charts and `.streamlit/config.toml` read from it; styling never touches the calculations.
 
 ## What works and what does not
 
