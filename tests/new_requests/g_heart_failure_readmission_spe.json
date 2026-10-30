@@ -1,0 +1,12 @@
+{
+  "id": "NEW-G",
+  "requested_as": "health data access application",
+  "requested_format": "pseudonymised records",
+  "purpose": "We need individual-level histories to train and validate a readmission prediction model for patients with heart failure.",
+  "question": "Provide conditions, medications and encounters for patients with heart failure.",
+  "definitions": [
+    "Heart failure = any condition of heart failure.",
+    "Cohort = patients with heart failure.",
+    "Report the size of the cohort you would make available."
+  ]
+}

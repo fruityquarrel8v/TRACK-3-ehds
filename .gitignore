@@ -1,2 +1,7 @@
 .DS_Store
 __pycache__/
+spe_workspaces/
+audit_log.jsonl
+evaluation_results.json
+disclosure_ledger.jsonl
+.env

@@ -1,0 +1,399 @@
+from pathlib import Path
+
+from streamlit.testing.v1 import AppTest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+QUESTION = "Compare HbA1c levels between male and female patients with type 2 diabetes aged 40-65 during 2025."
+
+
+def _app():
+    return AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
+
+
+def _advanced_options(at):
+    return next(expander for expander in at.expander if expander.label == "Advanced options")
+
+
+def _submit_example(at, rid="R01"):
+    advanced = _advanced_options(at)
+    advanced.radio[0].set_value("Example request")
+    at.run()
+    advanced = _advanced_options(at)
+    advanced.selectbox[0].set_value(rid)
+    at.run()
+    advanced = _advanced_options(at)
+    next(button for button in advanced.button if button.label == "Submit this request").click()
+    at.run()
+    return at
+
+
+def _fill_review(at):
+    at.text_input(key="review_name").set_value("Dr Test")
+    at.text_input(key="review_org").set_value("Test University")
+    at.text_area(key="review_purpose").set_value("Public health research on diabetes care.")
+
+
+def test_landing_is_a_single_question_box():
+    at = _app()
+    assert not at.exception
+    assert any("What would you like to research?" in m.value for m in at.markdown)
+    assert at.text_area(key="research_question").value == ""
+    advanced = _advanced_options(at)
+    assert advanced.radio[0].label == "Request source"
+    assert "Example request" in advanced.radio[0].options
+    assert not any(widget.key == "review_name" for widget in at.text_input)
+
+
+def test_example_chip_populates_question():
+    at = _app()
+    next(button for button in at.button if button.label == "Explore diabetes prevalence").click()
+    at.run()
+    assert "type 2 diabetes" in at.text_area(key="research_question").value
+
+
+def test_question_flow_interprets_reviews_and_submits():
+    at = _app()
+    at.text_area(key="research_question").set_value(QUESTION)
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["stage"] == "understand"
+    card = next(m.value for m in at.markdown if 'class="card"' in m.value)
+    assert "Type 2 diabetes" in card and "ICD-10 E11" in card and "40–65" in card and "Sex" in card
+    assert "2025" in card and "HbA1c" in card
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    at.button(key="review_submit").click()
+    at.run()
+    assert any("Please add" in e.value for e in at.error)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["stage"] == "result"
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert any("Your research results" in m.value for m in at.markdown)
+    table = at.dataframe[0].value
+    assert "7.2" in table.astype(str).to_numpy().ravel().tolist()
+
+
+def test_unrecognised_concept_cannot_continue():
+    at = _app()
+    at.text_area(key="research_question").set_value("Number of patients with sepsis by sex")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "understand"
+    assert any("sepsis" in w.value for w in at.warning)
+    assert at.error
+    assert not any(button.key == "understand_continue" for button in at.button)
+
+
+def test_medication_clarification_updates_request():
+    at = _app()
+    at.text_area(key="research_question").set_value(
+        "How many adults with atrial fibrillation take an oral anticoagulant, by sex?")
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "clarify"
+    radio = next(r for r in at.radio if r.key.startswith("clarify_"))
+    radio.set_value(radio.options[1])
+    at.run()
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    leaves = at.session_state["draft"]["criteria"]["population"]["items"]
+    assert any(item.get("type") == "medication" and item.get("status") == "ever" for item in leaves)
+    assert not at.session_state["draft"]["assumptions"]
+
+
+def test_guided_builder_keeps_answers_across_steps():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    assert at.session_state["stage"] == "guided" and at.session_state["guided_step"] == 1
+    at.radio(key="guided_goal").set_value("Compare patient groups")
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Diagnosis")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    diagnosis = at.selectbox(key="builder_1_diagnosis")
+    t2d = next(option for option in diagnosis.options if option.startswith("Type 2 diabetes"))
+    diagnosis.set_value(t2d)
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Laboratory measurement")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    assert any("Type 2 diabetes" in i.value for i in at.info)
+    at.button(key="builder_2_remove").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    at.button(key="guided_next_2").click()
+    at.run()
+    assert at.session_state["guided_step"] == 3
+    at.radio(key="guided_analysis").set_value("Compare groups")
+    at.run()
+    at.multiselect(key="builder_group_by").set_value(["Sex"])
+    at.run()
+    at.button(key="guided_back_3").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    at.button(key="guided_back_2").click()
+    at.run()
+    assert at.radio(key="guided_goal").value == "Compare patient groups"
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.button(key="guided_next_2").click()
+    at.run()
+    assert at.multiselect(key="builder_group_by").value == ["Sex"]
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert at.session_state["last"].startswith("GUIDED-")
+
+
+def test_edit_details_prefills_guided_builder():
+    at = _app()
+    at.text_area(key="research_question").set_value(QUESTION)
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_edit").click()
+    at.run()
+    assert at.session_state["stage"] == "guided" and at.session_state["guided_step"] == 2
+    assert len(at.session_state["builder_criteria"]) >= 2
+    assert any(w.key == "builder_1_diagnosis" for w in at.selectbox)
+
+
+def test_advanced_example_request_and_chart():
+    at = _submit_example(_app())
+    assert not at.exception
+    assert at.session_state["stage"] == "result"
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    chart_input = next(widget for widget in at.text_input if widget.label == "Refine the chart in your own words")
+    chart_input.set_value("bar chart of prevalence by region")
+    at.run()
+    assert not at.exception
+    assert not at.get("download_button")  # exports hidden for the demo (EHDS_ENABLE_EXPORTS unset)
+    chart_input = next(widget for widget in at.text_input if widget.label == "Refine the chart in your own words")
+    chart_input.set_value("histogram of HbA1c")
+    at.run()
+    assert any("secure processing environment" in element.value for element in at.info)
+
+
+def test_rejected_request_is_explained():
+    at = _submit_example(_app(), "R02")
+    assert any("Article 54" in m.value or "Art. 54" in m.value for m in at.markdown) or any(
+        "Decision on your request" in m.value for m in at.markdown)
+    assert not at.dataframe
+
+
+def test_demo_scenarios_show_differencing_protection():
+    at = _app()
+    at.sidebar.radio[0].set_value("Demo scenarios")
+    at.run()
+    assert not at.exception
+    at.button(key="demo_reset").click()
+    at.run()
+    at.button(key="demo_run_1").click()
+    at.run()
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert not any("Results withheld" in w.value for w in at.warning)
+    at.button(key="demo_run_2").click()
+    at.run()
+    assert not at.exception
+    assert any("cannot be released safely" in w.value for w in at.warning)
+    assert any("What you can do instead" in m.value for m in at.markdown)
+    at.button(key="demo_run_4").click()
+    at.run()
+    assert any("REJECT" in e.value for e in at.error)
+
+
+def test_incomplete_question_is_clarified_and_submitted():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show me diabetes statistics.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "understand"
+    assert any("type 2 diabetes" in i.value.casefold() for i in at.info)
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "clarify"
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    items = at.session_state["draft"]["criteria"]["population"]["items"]
+    assert any(item.get("icd10") == ["E11"] for item in items)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+
+
+def test_hospitalisation_clarification_switches_to_inpatient_stays():
+    at = _app()
+    at.text_area(key="research_question").set_value("How many patients with heart failure were hospitalized in 2025?")
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "clarify"
+    radio = at.radio(key="clarify_hospitalisation")
+    radio.set_value(radio.options[0])
+    at.run()
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    items = at.session_state["draft"]["criteria"]["population"]["items"]
+    stay = next(item for item in items if item["type"] == "hospital_stay")
+    assert stay["icd10"] == ["I50"]
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    table = at.dataframe[0].value.astype(str).to_numpy().ravel().tolist()
+    assert "103" in table
+
+
+def test_unsupported_question_cannot_continue():
+    at = _app()
+    at.text_area(key="research_question").set_value("Compare genetic variants associated with heart failure.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert any("genetic" in e.value for e in at.error)
+    assert not any(button.key == "understand_continue" for button in at.button)
+
+
+def test_guided_builder_connectors_build_or_groups_and_not():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    for _ in range(3):
+        at.selectbox(key="builder_new_category").set_value("Diagnosis")
+        at.button(key="builder_add_criterion").click()
+        at.run()
+    options = at.selectbox(key="builder_1_diagnosis").options
+    asthma = next(o for o in options if o.startswith("Asthma"))
+    copd = next(o for o in options if o.startswith("COPD"))
+    t2d = next(o for o in options if o.startswith("Type 2 diabetes"))
+    at.selectbox(key="builder_1_diagnosis").set_value(asthma)
+    at.selectbox(key="builder_2_diagnosis").set_value(copd)
+    at.selectbox(key="builder_3_diagnosis").set_value(t2d)
+    assert at.selectbox(key="builder_1_op").options == ["Include", "NOT"]
+    at.selectbox(key="builder_2_op").set_value("OR")
+    at.selectbox(key="builder_3_op").set_value("AND NOT")
+    at.run()
+    items = at.session_state["guided_items"]
+    assert items[0]["type"] == "group" and items[0]["match"] == "any"
+    assert [i["label"] for i in items[0]["items"]] == ["Asthma", "COPD"]
+    assert items[1]["label"] == "Type 2 diabetes" and items[1]["exclude"] is True
+    assert any("(Asthma OR COPD) AND NOT Type 2 diabetes" in m.value for m in at.markdown)
+    assert any("at least one of" in i.value for i in at.info)
+    at.button(key="guided_next_2").click()
+    at.run()
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    assert any("(Asthma OR COPD) AND NOT Type 2 diabetes" in m.value for m in at.markdown)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+
+
+def test_builder_year_boxes_survive_adding_a_row():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_from_year").set_value(2024)
+    at.run()
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert at.selectbox(key="builder_from_year").value == 2024
+    assert at.selectbox(key="builder_to_year").value == 0
+
+
+def test_trend_question_gives_results_per_year_and_a_chart():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show HbA1c trends in patients with type 2 diabetes")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert any("Per calendar year" in m.value for m in at.markdown)
+    at.button(key="understand_continue").click()
+    at.run()
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    resp = at.session_state["decisions"][at.session_state["last"]]
+    assert list(resp["answer"]) == ["2023", "2024", "2025"]
+    assert not any("single number is not charted" in c.value for c in at.caption)
+    assert any(w.key.startswith("chart_view_") for w in at.get("button_group"))
+
+
+def test_guided_over_time_builds_year_grouping():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Diagnosis")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    at.button(key="guided_next_2").click()
+    at.run()
+    at.radio(key="guided_analysis").set_value("Explore changes over time")
+    at.run()
+    at.selectbox(key="builder_year_from").set_value(2024)
+    at.run()
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    assert at.session_state["draft"]["criteria"]["group_by"][0] == {"dimension": "year", "from": 2024, "to": 2025}
+
+
+def test_view_selector_switches_freely_without_recalculating():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show changes in type 2 diabetes diagnoses over time.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_continue").click()
+    at.run()
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    rid = at.session_state["last"]
+    answer = at.session_state["decisions"][rid]["answer"]
+    assert [next(iter(answer[y].values())) for y in ("2023", "2024", "2025")] == [1083, 1118, 1152]
+    audit_before = len(at.session_state["decisions"])
+    selector = next(w for w in at.get("button_group") if w.key == f"chart_view_{rid}")
+    assert at.session_state["chart_view"][rid]["view"] == "line" and selector is not None
+    for view in ["bar", "line", "table", "line", "table", "bar", "line", "bar", "table", "bar"]:
+        next(w for w in at.get("button_group") if w.key == f"chart_view_{rid}").set_value(view)
+        at.run()
+        assert not at.exception
+        assert at.session_state["chart_view"][rid]["view"] == view
+        tables = [d.value for d in at.dataframe]
+        shown = next(t for t in tables if "patients" in list(t.columns) or any("patients" in c for c in t.columns))
+        assert sorted(str(v) for v in shown.iloc[:, -1].tolist()) == sorted(["1083", "1118", "1152"])
+    assert len(at.session_state["decisions"]) == audit_before
+    at.text_input(key=f"chart_cmd_{rid}").set_value("Show this as a line graph")
+    at.run()
+    assert at.session_state["chart_view"][rid]["view"] == "line"
+    at.text_input(key=f"chart_cmd_{rid}").set_value("show a table instead")
+    at.run()
+    assert at.session_state["chart_view"][rid]["view"] == "table"

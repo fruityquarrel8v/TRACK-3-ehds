@@ -1,0 +1,11 @@
+{
+  "id": "NEW-F",
+  "requested_as": "health data request",
+  "requested_format": "anonymised statistics",
+  "purpose": "Public-health research studying smoking-related COPD to improve prevention and care.",
+  "question": "How many patients have COPD, by region?",
+  "definitions": [
+    "COPD = any condition with an ICD-10 code starting with J44.",
+    "Report per region: patients with COPD."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "NEW-C",
+  "requested_as": "health data request",
+  "requested_format": "anonymised statistics",
+  "purpose": "Scientific research on regional heart failure prevalence.",
+  "question": "How many patients have heart failure, by region?",
+  "definitions": [
+    "Heart failure = any condition of heart failure.",
+    "Report per region: patients with heart failure."
+  ]
+}

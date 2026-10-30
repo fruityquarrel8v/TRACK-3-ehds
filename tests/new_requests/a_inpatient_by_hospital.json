@@ -1,0 +1,12 @@
+{
+  "id": "NEW-A",
+  "requested_as": "health data request",
+  "requested_format": "anonymised statistics",
+  "purpose": "Official statistics for hospital quality planning.",
+  "question": "How many inpatient stays in 2025 had main diagnosis I50, by hospital?",
+  "definitions": [
+    "Inpatient stay = encounter with type 'inpatient' and primary_icd10 starting with I50.",
+    "Count stays (not patients) whose start_date is in 2025.",
+    "Report per hospital (data_holder): inpatient stays."
+  ]
+}
