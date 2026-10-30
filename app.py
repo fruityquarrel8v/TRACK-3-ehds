@@ -283,6 +283,79 @@ def _year_bounds(from_year, to_year):
     return start, end
 
 
+def _year_value(value):
+    return value if isinstance(value, int) and value > 0 else None
+
+
+CONNECTORS_FIRST = ["Include", "NOT"]
+CONNECTORS = ["AND", "OR", "AND NOT", "OR NOT"]
+
+
+def _combine_rows(pairs):
+    """Turn [(connector, criterion)] read top-to-bottom into population items: OR joins a row with the
+    row above (an ANY group); AND starts a new group; NOT excludes that row."""
+    groups = []
+    for index, (op, item) in enumerate(pairs):
+        item = dict(item)
+        item["exclude"] = "NOT" in str(op)
+        if index == 0 or str(op).startswith("AND") or str(op) in CONNECTORS_FIRST:
+            groups.append([item])
+        else:
+            groups[-1].append(item)
+    return [group[0] if len(group) == 1 else {"type": "group", "match": "any", "items": group} for group in groups]
+
+
+def _rows_from_population(population):
+    """Inverse of _combine_rows for one level of nesting: [(connector, leaf)], or None if the structure
+    cannot be shown as a top-to-bottom list (deeper nesting, excluded groups, (A AND B) OR C)."""
+    if not isinstance(population, dict):
+        return []
+    items = population.get("items", []) or []
+    top_any = str(population.get("match", "all")).casefold() == "any"
+    pairs = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if "items" in item:
+            children = [c for c in item.get("items", []) if isinstance(c, dict)]
+            if item.get("exclude") or any("items" in c for c in children):
+                return None
+            group_any = str(item.get("match", "all")).casefold() == "any"
+            if top_any and not group_any and len(children) > 1:
+                return None
+            first, rest = ("OR", "OR") if top_any else (("AND", "OR") if group_any else ("AND", "AND"))
+            pairs.extend((first if index == 0 else rest, child) for index, child in enumerate(children))
+        else:
+            pairs.append(("OR" if top_any else "AND", item))
+    return pairs
+
+
+def _leaf_label(item):
+    kind = item.get("type")
+    if kind == "age":
+        low, high = item.get("min"), item.get("max")
+        return f"aged {low}\u2013{high}" if low is not None and high is not None else (
+            f"aged {low}+" if low is not None else f"aged \u2264{high}")
+    if kind == "sex":
+        return str(item.get("value", "")).capitalize()
+    if kind in {"region", "data_holder"}:
+        return ", ".join(item.get("values", []))
+    if kind == "lab" and item.get("op"):
+        return f"{item.get('label')} {item.get('op')} {item.get('value')}"
+    return str(item.get("label") or kind)
+
+
+def _boolean_summary(pairs):
+    groups = []
+    for index, (op, item) in enumerate(pairs):
+        text = ("NOT " if ("NOT" in str(op) or item.get("exclude")) else "") + _leaf_label(item)
+        if index == 0 or str(op).startswith("AND") or str(op) in CONNECTORS_FIRST:
+            groups.append([text])
+        else:
+            groups[-1].append(text)
+    return " AND ".join(f"({' OR '.join(g)})" if len(g) > 1 else g[0] for g in groups)
+
+
 def _age_bands(preset, custom):
     if preset == "10-year bands":
         return [
@@ -376,14 +449,11 @@ def _prefill_builder(criteria, applicant, purpose, request_type):
     data = warm_data()
     population = criteria.get("population", {})
     items = population.get("items", []) if isinstance(population, dict) else []
-    leaves, has_nested_group = _criterion_leaves(items)
-    flat_any = (
-        isinstance(population, dict)
-        and str(population.get("match", "all")).casefold() == "any"
-    )
-    st.session_state["builder_match"] = (
-        "ANY of the criteria" if flat_any else "ALL of the criteria"
-    )
+    leaves, _ = _criterion_leaves(items)
+    pairs = _rows_from_population(population)
+    has_nested_group = pairs is None
+    if has_nested_group:
+        pairs = [("AND", leaf) for leaf in leaves]
     st.session_state["builder_criteria"] = []
     st.session_state["builder_applicant_name"] = applicant.get("name", "")
     st.session_state["builder_applicant_org"] = applicant.get("organisation", "")
@@ -406,8 +476,8 @@ def _prefill_builder(criteria, applicant, purpose, request_type):
             starts.append(int(str(metric["period_start"])[:4]))
         if metric.get("period_end"):
             ends.append(int(str(metric["period_end"])[:4]))
-    st.session_state["builder_from_year"] = min(starts) if starts else None
-    st.session_state["builder_to_year"] = max(ends) if ends else None
+    st.session_state["builder_from_year"] = min(starts) if starts else 0
+    st.session_state["builder_to_year"] = max(ends) if ends else 0
 
     dimension_labels = {
         "sex": "Sex",
@@ -482,17 +552,22 @@ def _prefill_builder(criteria, applicant, purpose, request_type):
         "during_period": "Prescribed during the time period",
     }
 
-    for index, item in enumerate(leaves, start=1):
+    for index, (op, item) in enumerate(pairs, start=1):
         kind = item.get("type")
         if kind not in categories:
             continue
         category, option_kind, code_field, key_suffix = categories[kind]
         row_id = index
+        excluded = bool(item.get("exclude"))
+        if not st.session_state["builder_criteria"]:
+            connector = "NOT" if excluded else "Include"
+        else:
+            connector = str(op).split()[0] + (" NOT" if excluded else "")
         st.session_state["builder_criteria"].append(
             {"id": row_id, "category": category}
         )
         st.session_state["builder_next_criterion_id"] = row_id
-        st.session_state[f"builder_{row_id}_exclude"] = bool(item.get("exclude"))
+        st.session_state[f"builder_{row_id}_op"] = connector
         if kind in {"condition", "medication", "lab", "hospital_stay"}:
             table = "encounters" if kind == "hospital_stay" else None
             options = _builder_concepts(data, option_kind, table)
@@ -549,16 +624,21 @@ def _prefill_builder(criteria, applicant, purpose, request_type):
     return has_nested_group
 
 
-def _builder_criterion_row(row, data, period_start, period_end):
+def _builder_criterion_row(row, data, period_start, period_end, first=False):
     row_id = row["id"]
     category = row["category"]
     criterion = None
-    st.markdown(f"**{category}**")
-    control_col, remove_col = st.columns([5, 1])
-    exclude = control_col.toggle(
-        "Exclude this criterion",
-        key=f"builder_{row_id}_exclude",
-    )
+    options = CONNECTORS_FIRST if first else CONNECTORS
+    op_key = f"builder_{row_id}_op"
+    current = st.session_state.get(op_key)
+    if current not in options:
+        st.session_state[op_key] = (options[1] if current and "NOT" in str(current) else options[0])
+    op_col, title_col, remove_col = st.columns([1.3, 3.7, 1])
+    op = op_col.selectbox("Combine with the rows above", options, key=op_key, label_visibility="collapsed",
+                          help="Read top to bottom: AND starts a new group, OR joins this row with the row "
+                               "above, NOT excludes patients matching this row.")
+    title_col.markdown(f"**{category}**")
+    exclude = "NOT" in str(op)
     if remove_col.button("Remove", key=f"builder_{row_id}_remove"):
         st.session_state["builder_criteria"] = [
             item for item in st.session_state["builder_criteria"]
@@ -1005,8 +1085,11 @@ def _interpretation_rows(criteria):
     rows = []
     population = criteria.get("population", {}) if isinstance(criteria, dict) else {}
     leaves, nested = _criterion_leaves(population.get("items", []) if isinstance(population, dict) else [])
-    if str(population.get("match", "all")).casefold() == "any" and len(leaves) > 1:
-        rows.append(("Combination", "Patients meeting at least one of the criteria", "OR"))
+    pairs = _rows_from_population(population)
+    if pairs is None:
+        rows.append(("Combination", "Contains nested criteria groups", "Edit details is not available for nested groups"))
+    elif len(pairs) > 1:
+        rows.append(("Combination", _boolean_summary(pairs), "Read top to bottom; OR joins a row with the one above"))
     for item in leaves:
         kind = item.get("type")
         excluded = bool(item.get("exclude"))
@@ -1054,8 +1137,6 @@ def _interpretation_rows(criteria):
             rows.append(("Region", prefix + ", ".join(item.get("values", [])), ""))
         elif kind == "data_holder":
             rows.append(("Hospital", prefix + ", ".join(item.get("values", [])), "Patients registered at this data holder"))
-    if nested:
-        rows.append(("Combination", "Contains nested criteria groups", "Edit details is not available for nested groups"))
     group_by = criteria.get("group_by", []) if isinstance(criteria, dict) else []
     if group_by:
         names = [DIM_LABELS.get(g.get("dimension"), g.get("dimension")) for g in group_by]
@@ -1391,23 +1472,24 @@ def _population_step(data):
     for table, column in (("conditions", "onset_date"), ("observations", "date"),
                           ("medications", "start_date"), ("encounters", "start_date")):
         years.update(int(v) for v in data[table][column].dropna().dt.year.unique() if int(v) <= 2025)
-    year_options = [None, *sorted(years)]
+    year_options = [0, *sorted(years)]
     st.markdown("**Time period** (optional)")
     y1, y2 = st.columns(2)
-    from_year = y1.selectbox("From year", year_options, key="builder_from_year",
-                             format_func=lambda v: "No start year" if v is None else str(v))
-    to_year = y2.selectbox("To year", year_options, key="builder_to_year",
-                           format_func=lambda v: "No end year" if v is None else str(v))
+    for key in ("builder_from_year", "builder_to_year"):
+        if st.session_state.get(key) not in year_options:
+            st.session_state[key] = 0
+    from_year = _year_value(y1.selectbox("From year", year_options, key="builder_from_year",
+                                         format_func=lambda v: "No start year" if not v else str(v)))
+    to_year = _year_value(y2.selectbox("To year", year_options, key="builder_to_year",
+                                       format_func=lambda v: "No end year" if not v else str(v)))
     st.caption("Lab, medication and hospital-stay records cover 2023–2025; diagnoses go back further.")
     period_start, period_end = _year_bounds(from_year, to_year)
     invalid_period = from_year is not None and to_year is not None and from_year > to_year
     if invalid_period:
         st.error("The start year must not be after the end year.")
-    st.markdown("**Patients must meet:**")
-    st.radio("Patients must meet", ["ALL of the criteria", "ANY of the criteria"], horizontal=True,
-             key="builder_match", label_visibility="collapsed",
-             help="ALL = every criterion applies (AND). ANY = at least one applies (OR). "
-                  "Use 'Exclude' on a criterion for NOT.")
+    st.markdown("**Criteria**")
+    st.caption("Combine rows like a library catalogue search: AND, OR, AND NOT, OR NOT. Rows are read from top "
+               "to bottom; OR joins a row with the one above, AND starts a new group.")
     categories = ["Diagnosis", "Medication", "Laboratory measurement", "Age", "Sex", "Region",
                   "Hospital (data holder)", "Hospital stay (main diagnosis)"]
     a1, a2 = st.columns([2, 1])
@@ -1417,16 +1499,18 @@ def _population_step(data):
         st.session_state["builder_next_criterion_id"] = row_id
         st.session_state.setdefault("builder_criteria", []).append({"id": row_id, "category": category})
     st.session_state.setdefault("builder_criteria", [])
-    items = []
-    for row in list(st.session_state["builder_criteria"]):
+    pairs = []
+    rows = list(st.session_state["builder_criteria"])
+    for row in rows:
         with st.container(border=True):
-            criterion = _builder_criterion_row(row, data, period_start, period_end)
+            criterion = _builder_criterion_row(row, data, period_start, period_end, first=row is rows[0])
         if criterion is not None:
-            items.append(criterion)
-    if not st.session_state["builder_criteria"]:
+            pairs.append((st.session_state.get(f"builder_{row['id']}_op", "AND"), criterion))
+    if not rows:
         st.caption("No criteria yet. Add at least one, e.g. a diagnosis.")
-    match = "any" if st.session_state.get("builder_match") == "ANY of the criteria" else "all"
-    return items, match, period_start, period_end, invalid_period
+    elif len(pairs) > 1:
+        st.markdown(f"Combination: **{_escape(_boolean_summary(pairs))}**")
+    return _combine_rows(pairs), "all", period_start, period_end, invalid_period
 
 
 def _analysis_step(data, period_start, period_end):
@@ -1509,15 +1593,14 @@ def _screen_guided():
             st.session_state["guided_step"] = 1
             _go("guided")
     elif step == 3:
-        period_start, period_end = _year_bounds(st.session_state.get("builder_from_year"),
-                                                st.session_state.get("builder_to_year"))
+        period_start, period_end = _year_bounds(_year_value(st.session_state.get("builder_from_year")),
+                                                _year_value(st.session_state.get("builder_to_year")))
         group_by, metrics = _analysis_step(data, period_start, period_end)
         c1, c2 = st.columns([1, 1])
         if c1.button("Next", type="primary", key="guided_next_3", width="stretch"):
             # Recompute the population from the stored rows without rendering them again.
             items = st.session_state.get("guided_items", [])
-            match = "any" if st.session_state.get("builder_match") == "ANY of the criteria" else "all"
-            criteria = {"population": {"match": match, "items": items}, "group_by": group_by,
+            criteria = {"population": {"match": "all", "items": items}, "group_by": group_by,
                         "metrics": metrics, "record_types": []}
             goal = st.session_state.get("guided_goal", "")
             details = st.session_state.get("guided_details", "")

@@ -271,3 +271,57 @@ def test_unsupported_question_cannot_continue():
     at.run()
     assert any("genetic" in e.value for e in at.error)
     assert not any(button.key == "understand_continue" for button in at.button)
+
+
+def test_guided_builder_connectors_build_or_groups_and_not():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    for _ in range(3):
+        at.selectbox(key="builder_new_category").set_value("Diagnosis")
+        at.button(key="builder_add_criterion").click()
+        at.run()
+    options = at.selectbox(key="builder_1_diagnosis").options
+    asthma = next(o for o in options if o.startswith("Asthma"))
+    copd = next(o for o in options if o.startswith("COPD"))
+    t2d = next(o for o in options if o.startswith("Type 2 diabetes"))
+    at.selectbox(key="builder_1_diagnosis").set_value(asthma)
+    at.selectbox(key="builder_2_diagnosis").set_value(copd)
+    at.selectbox(key="builder_3_diagnosis").set_value(t2d)
+    assert at.selectbox(key="builder_1_op").options == ["Include", "NOT"]
+    at.selectbox(key="builder_2_op").set_value("OR")
+    at.selectbox(key="builder_3_op").set_value("AND NOT")
+    at.run()
+    items = at.session_state["guided_items"]
+    assert items[0]["type"] == "group" and items[0]["match"] == "any"
+    assert [i["label"] for i in items[0]["items"]] == ["Asthma", "COPD"]
+    assert items[1]["label"] == "Type 2 diabetes" and items[1]["exclude"] is True
+    assert any("(Asthma OR COPD) AND NOT Type 2 diabetes" in m.value for m in at.markdown)
+    assert any("at least one of" in i.value for i in at.info)
+    at.button(key="guided_next_2").click()
+    at.run()
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    assert any("(Asthma OR COPD) AND NOT Type 2 diabetes" in m.value for m in at.markdown)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+
+
+def test_builder_year_boxes_survive_adding_a_row():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_from_year").set_value(2024)
+    at.run()
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert at.selectbox(key="builder_from_year").value == 2024
+    assert at.selectbox(key="builder_to_year").value == 0
