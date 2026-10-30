@@ -1314,7 +1314,7 @@ def _interpretation_rows(criteria):
             elif item.get("onset_start"):
                 when = f"diagnosed {when}"
             elif item.get("onset_end"):
-                when = f"diagnosed {when}"
+                when = f"with a documented diagnosis {when} (cumulative)"
             value = f"{prefix}people with {label}" + (f", {when}" if when else "")
             rows.append(("Condition", value, f"Identified using ICD-10 {', '.join(item.get('icd10', []))} codes"))
         elif kind == "hospital_stay":
@@ -1377,6 +1377,11 @@ def _interpretation_rows(criteria):
     record_types = criteria.get("record_types", []) if isinstance(criteria, dict) else []
     if record_types:
         rows.append(("Records requested", ", ".join(record_types), "Only inside a secure processing environment"))
+    if isinstance(criteria, dict) and criteria.get("diagnosis_timing"):
+        rows.append(("Diagnosis timing",
+                     "Cumulative: documented diagnosis by 31 December of each year" if criteria["diagnosis_timing"] == "cumulative"
+                     else "Newly recorded: first diagnosis within each calendar year",
+                     "Change it by rephrasing (e.g. 'newly diagnosed during each year' or 'documented by the end of each year')"))
     if isinstance(criteria, dict) and criteria.get("access_hint") == "health data access application":
         rows.append(("Access requested", "Pseudonymised records in a secure processing environment",
                      "Taken from your question; confirm on the review screen"))
@@ -1417,6 +1422,11 @@ def _apply_clarification(draft, question, action):
         return "stop"
     if action.get("add"):
         items.append(dict(action["add"]))
+    if action.get("diagnosis_timing"):
+        from ehds_hdab.nl import DIAGNOSIS_TIMING_TEXT, apply_diagnosis_timing
+        draft["criteria"] = apply_diagnosis_timing(draft["criteria"], action["diagnosis_timing"])
+        draft["assumptions"] = [a for a in draft.get("assumptions", []) if not a.startswith("Diagnosis timing")]
+        draft["assumptions"].append(DIAGNOSIS_TIMING_TEXT[action["diagnosis_timing"]])
     label = action.get("replace_condition_with_stay")
     if label:
         for index, item in enumerate(list(items)):
@@ -1624,7 +1634,7 @@ def _screen_review():
                                       key="review_record_types")
         st.caption("Explain in the purpose why anonymised statistics are not enough (e.g. training a prediction "
                    "model on individual histories). Otherwise the request is downgraded to statistics.")
-    criteria = {k: v for k, v in criteria.items() if k not in ("access_hint", "purpose_hint")}
+    criteria = {k: v for k, v in criteria.items() if k not in ("access_hint", "purpose_hint")}  # diagnosis_timing stays: it documents the measure
     criteria["record_types"] = record_types
     request = {
         "applicant": {"name": name, "organisation": org, "country": country},

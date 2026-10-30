@@ -378,7 +378,7 @@ def test_view_selector_switches_freely_without_recalculating():
     at.run()
     rid = at.session_state["last"]
     answer = at.session_state["decisions"][rid]["answer"]
-    assert [answer[y]["patients"] for y in ("2023", "2024", "2025")] == [1083, 1118, 1152]
+    assert [next(iter(answer[y].values())) for y in ("2023", "2024", "2025")] == [1083, 1118, 1152]
     audit_before = len(at.session_state["decisions"])
     selector = next(w for w in at.get("button_group") if w.key == f"chart_view_{rid}")
     assert at.session_state["chart_view"][rid]["view"] == "line" and selector is not None
