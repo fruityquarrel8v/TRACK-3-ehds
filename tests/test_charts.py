@@ -78,7 +78,7 @@ def test_distribution_request_gives_counts_per_clinical_category():
 def test_relationship_request_is_aggregated_not_a_scatter():
     resp, interpretation = ask("Show the relationship between BMI and HbA1c.")
     plan = build_plan(resp, "patients with measurements", "No time period applied.")
-    assert plan["category_axis"] and plan["measure_type"] == "mean" and plan["x_label"] == "mean latest HbA1c (%)"
+    assert plan["category_axis"] and plan["measure_type"] == "mean" and plan["x_label"] == "BMI category"
     assert any("not a patient-level scatter plot" in a for a in interpretation.assumptions)
     refused = interpret_chart_command("scatter plot of BMI against HbA1c", {}, ["patients"], [])
     assert not refused["ok"] and "secure processing environment" in refused["message"]
