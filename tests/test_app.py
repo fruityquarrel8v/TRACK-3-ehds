@@ -342,7 +342,7 @@ def test_trend_question_gives_results_per_year_and_a_chart():
     resp = at.session_state["decisions"][at.session_state["last"]]
     assert list(resp["answer"]) == ["2023", "2024", "2025"]
     assert not any("single number is not charted" in c.value for c in at.caption)
-    assert any(b.label.startswith("Line graph of") for b in at.button)
+    assert any(w.key.startswith("chart_view_") for w in at.get("button_group"))
 
 
 def test_guided_over_time_builds_year_grouping():
@@ -364,3 +364,36 @@ def test_guided_over_time_builds_year_grouping():
     at.run()
     assert at.session_state["stage"] == "review"
     assert at.session_state["draft"]["criteria"]["group_by"][0] == {"dimension": "year", "from": 2024, "to": 2025}
+
+
+def test_view_selector_switches_freely_without_recalculating():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show changes in type 2 diabetes diagnoses over time.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_continue").click()
+    at.run()
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    rid = at.session_state["last"]
+    answer = at.session_state["decisions"][rid]["answer"]
+    assert [answer[y]["patients"] for y in ("2023", "2024", "2025")] == [1083, 1118, 1152]
+    audit_before = len(at.session_state["decisions"])
+    selector = next(w for w in at.get("button_group") if w.key == f"chart_view_{rid}")
+    assert at.session_state["chart_view"][rid]["view"] == "line" and selector is not None
+    for view in ["bar", "line", "table", "line", "table", "bar", "line", "bar", "table", "bar"]:
+        next(w for w in at.get("button_group") if w.key == f"chart_view_{rid}").set_value(view)
+        at.run()
+        assert not at.exception
+        assert at.session_state["chart_view"][rid]["view"] == view
+        tables = [d.value for d in at.dataframe]
+        shown = next(t for t in tables if "patients" in list(t.columns) or any("patients" in c for c in t.columns))
+        assert sorted(str(v) for v in shown.iloc[:, -1].tolist()) == sorted(["1083", "1118", "1152"])
+    assert len(at.session_state["decisions"]) == audit_before
+    at.text_input(key=f"chart_cmd_{rid}").set_value("Show this as a line graph")
+    at.run()
+    assert at.session_state["chart_view"][rid]["view"] == "line"
+    at.text_input(key=f"chart_cmd_{rid}").set_value("show a table instead")
+    at.run()
+    assert at.session_state["chart_view"][rid]["view"] == "table"
