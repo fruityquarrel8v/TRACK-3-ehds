@@ -100,12 +100,16 @@ def show_articles(articles):
 
 def show_response(resp, staff=False):
     kind, title = DECISION_STYLE.get(resp["decision"], ("warning", resp["decision"]))
+    if resp.get("withheld"):
+        kind, title = "warning", "Approved request, result withheld by the disclosure check"
     getattr(st, kind)(f"**{title}** (`{resp['decision']}`)")
     st.markdown(f"**Reason:** {resp['reason']}")
     st.markdown("**Legal basis:**")
     show_articles(resp.get("articles"))
-    if resp.get("needs_staff_review"):
+    if resp.get("needs_staff_review") and not resp.get("withheld"):
         st.warning("Parts of this request could not be interpreted automatically. A staff member will review it.")
+    elif resp.get("withheld"):
+        st.caption("A staff member will review this release decision.")
     answer = resp.get("answer")
     if resp.get("withheld"):
         reason = next(
@@ -1213,7 +1217,11 @@ def _screen_result():
         return
     approved = resp["decision"] != "REJECT"
     st.markdown("### Your research results" if approved else "### Decision on your request")
-    st.write(DECISION_EXPLANATIONS.get(resp["decision"], ""))
+    if resp.get("withheld"):
+        st.write("Your purpose is permitted, but releasing this particular result could reveal a protected small group "
+                 "when combined with statistics released earlier, so it is withheld.")
+    else:
+        st.write(DECISION_EXPLANATIONS.get(resp["decision"], ""))
     if resp.get("decision") == "APPROVE_STATISTICAL" and resp.get("answer") and not resp.get("withheld"):
         plan = resp.get("query_plan") or {}
         if not plan.get("group_by"):
@@ -1603,7 +1611,8 @@ def page_staff():
     ledger = disclosure.ledger_summary()
     if ledger:
         rows = [{"request": e.get("request_id"), "cell": " / ".join(map(str, e.get("path") or [])),
-                 "metric": e.get("metric"), "released value": e.get("released"), "status": e.get("status"),
+                 "metric": e.get("metric"), "released value": e.get("released") if e.get("released") is not None else "—",
+                 "status": e.get("status"),
                  "time": str(e.get("timestamp", ""))[:19]} for e in ledger[::-1]]
         st.dataframe(pd.DataFrame(rows).astype(str), hide_index=True, use_container_width=True)
     else:
