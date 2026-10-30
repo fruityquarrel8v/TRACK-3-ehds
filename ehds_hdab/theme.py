@@ -1,41 +1,42 @@
-"""Design tokens for the AIM Health Data Navigator (single source of truth for colours).
+"""Design tokens for HealthCare Rocket (single source of truth for colours).
 
-Palette: soft pink + powder pink + turquoise + deep teal + white. The Streamlit CSS in app.py, the Altair charts in
-charts.py and .streamlit/config.toml all take their colours from here. Styling never touches calculations: changing a
-token cannot change a released number.
+Palette: white surfaces, rose-pink brand accents, delicate pink borders, dark navy text, a little turquoise.
+The Streamlit CSS in app.py, the Altair charts in charts.py and .streamlit/config.toml all take their colours from
+here. Styling never touches calculations: changing a token cannot change a released number.
 """
 
 TOKENS = {
-    "primary": "#269D9B",         # ocean teal: borders, rings, selected outlines, chart series 1
-    "primary-text": "#1C7A78",    # darker teal for small text on white (4.6:1)
-    "button": "#193B46",          # deep teal navy: primary action fill (white text, 12:1)
-    "button-hover": "#24525F",
-    "button-active": "#10272F",
-    "turquoise": "#78D5D0",       # soft turquoise: light accents, step rings
-    "mint": "#E4F8F6",            # mint frost: information rows, hover fills, selected view
-    "pink": "#EBA6C4",            # rose pink: small accents only (never text)
-    "powder": "#F4B8D1",          # powder pink: chip borders, dividers
-    "pale-rose": "#FCE9F1",       # chips, sidebar selection
-    "bg": "#FFF8FB",              # blush, near-white page background
+    "primary": "#E77FA8",         # rose pink: brand accent, borders of focused inputs, active badges
+    "primary-hover": "#CD5F8C",
+    "button": "#BE4F7A",          # rose for filled buttons: white text reaches 4.6:1 (AA)
+    "button-hover": "#B04471",
+    "button-active": "#9A3A62",
+    "primary-text": "#B04471",    # rose for small text on white (5.6:1)
+    "pale-pink": "#FFF0F6",
+    "selected-pink": "#F8D6E5",
+    "border": "#F2DDE6",          # delicate pink hairline
+    "turquoise": "#78D5D0",       # thin accents only
+    "teal": "#268C8A",            # focus ring, icons (3.9:1 on white)
+    "pale-turquoise": "#F0FBFA",
+    "bg": "#FFFFFF",
     "surface": "#FFFFFF",
-    "text": "#193B46",            # deep teal navy
-    "muted": "#56707A",           # 5.3:1 on white
-    "border": "#E8EEF0",          # cool near-white hairline
-    "focus": "#269D9B",
+    "text": "#1C2844",
+    "muted": "#657087",           # 5.0:1 on white
+    "focus": "#268C8A",
     "success": "#1E8E5A",
     "success-tint": "#E8F7EF",
     "warning": "#9A6700",
     "warning-tint": "#FFF4DE",
     "error": "#B3261E",
     "error-tint": "#FDECEA",
-    "info": "#1C7A78",
-    "info-tint": "#E4F8F6",
+    "info": "#1F7A78",
+    "info-tint": "#F0FBFA",
 }
 
-# Series order: ocean teal first; the rest differ in hue so multi-series charts stay distinguishable.
-CHART_PALETTE = ["#269D9B", "#D9739F", "#193B46", "#78D5D0", "#6C84C9", "#C9A227", "#7A4F2A", "#56707A", "#F4B8D1", "#A5D8D4"]
-FIXED_COLOURS = {"female": "#D9739F", "male": "#269D9B"}
-CHART_TEXT = {"title": TOKENS["text"], "label": "#3C5560", "grid": "#E6ECEE"}
+# Series order: rose first; the rest differ in hue/lightness so multi-series charts stay distinguishable.
+CHART_PALETTE = ["#E77FA8", "#268C8A", "#1C2844", "#78D5D0", "#CD5F8C", "#6C84C9", "#C9A227", "#7A4F2A", "#657087", "#F2B8CC"]
+FIXED_COLOURS = {"female": "#E77FA8", "male": "#268C8A"}
+CHART_TEXT = {"title": TOKENS["text"], "label": "#44506B", "grid": "#EEE9EE"}
 
 
 def css_variables():

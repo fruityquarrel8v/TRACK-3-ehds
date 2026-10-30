@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 import re
 
+from .criteria import DEFAULT_YEARS
+
 from .data import load_data
 from .terminology import Concept, display_name, entries
 
@@ -182,16 +184,88 @@ def _period_fields(start, end, prefix="period_"):
     return result
 
 
+_INCIDENCE = re.compile(
+    r"\b(?:newly\s+(?:diagnosed|recorded|documented)|new\s+(?:cases?|diagnos\w*)|incident\s+cases?|incidence|"
+    r"first\s+(?:recorded|diagnosed)|diagnosed\s+(?:during|within))\b", re.I)
+_CUMULATIVE = re.compile(
+    r"\b(?:by\s+the\s+end\s+of|by\s+31\s+december|as\s+of\s+(?:the\s+end|31\s+december)|cumulative|documented|"
+    r"prevalen\w+|ever\s+diagnosed|living\s+with|with\s+a\s+(?:recorded\s+|documented\s+)?diagnosis)\b", re.I)
+DIAGNOSIS_TIMING_TEXT = {
+    "cumulative": "Diagnosis timing: cumulative \u2014 each year counts patients with a diagnosis recorded on or before "
+                  "31 December of that year (documented, not newly diagnosed).",
+    "new": "Diagnosis timing: newly recorded \u2014 each year counts patients whose first recorded diagnosis falls "
+           "within that calendar year.",
+}
+DIAGNOSIS_TIMING_LABEL = {"cumulative": "patients with documented diagnosis", "new": "newly diagnosed patients"}
+
+
 def _is_diagnosis_timing(text, start, end):
+    """True when a period next to a condition means 'first diagnosed within the period'. Explicit cumulative
+    wording wins; explicit incidence wording wins next; a bare 'diagnosed in 2025' keeps that meaning only in
+    non-trend questions (for trends the timing is decided separately, asking if ambiguous)."""
+    if _CUMULATIVE.search(text):
+        return False
     before = text[max(0, start - 90):start].casefold()
     after = text[end:min(len(text), end + 90)].casefold()
-    diagnosed_before = re.search(
-        r"(?:diagnos(?:ed|is)|new\s+(?:cases?|diagnoses?)|incident)"
-        r"[\w\s-]{0,55}$",
-        before,
-    )
+    if _INCIDENCE.search(before[-70:]) or _INCIDENCE.search(after[:70]):
+        return True
+    if TREND_WORDS.search(text):
+        return False
+    diagnosed_before = re.search(r"(?:diagnos(?:ed|is)|incident)[\w\s-]{0,55}$", before)
     diagnosed_after = re.match(r"\s*(?:was\s+)?diagnos(?:ed|is)\b", after)
     return bool(diagnosed_before or diagnosed_after)
+
+
+def _trend_years(criteria):
+    year_group = next((g for g in criteria.get("group_by", []) if g.get("dimension") == "year"), None)
+    if year_group is None:
+        return None
+    return int(year_group.get("from") or DEFAULT_YEARS[0]), int(year_group.get("to") or DEFAULT_YEARS[1])
+
+
+def apply_diagnosis_timing(criteria, mode):
+    """Set the per-year meaning of every (non-excluded) condition in a yearly trend: 'cumulative' = diagnosis
+    recorded on or before 31 December of each year; 'new' = first recorded within each year. Returns a copy."""
+    import copy
+
+    criteria = copy.deepcopy(criteria)
+    years = _trend_years(criteria)
+    if years is None or mode not in DIAGNOSIS_TIMING_TEXT:
+        return criteria
+    start, end = f"{years[0]}-01-01", f"{years[1]}-12-31"
+    for item in _leaves(criteria.get("population", {}).get("items", [])):
+        if item.get("type") != "condition" or item.get("exclude"):
+            continue
+        if mode == "new":
+            item["onset_start"], item["onset_end"] = start, end
+        else:
+            # Cumulative: no onset window; the yearly engine applies "recorded by 31 December of each year" itself.
+            # (An explicit onset_end would also narrow the trend range to that single year.)
+            item.pop("onset_start", None)
+    for metric in criteria.get("metrics", []):
+        if metric.get("type") == "count_patients" and metric.get("label") in ("patients", *DIAGNOSIS_TIMING_LABEL.values()):
+            metric["label"] = DIAGNOSIS_TIMING_LABEL[mode]
+    criteria["diagnosis_timing"] = mode
+    return criteria
+
+
+def _diagnosis_timing(text, criteria, assumptions):
+    """Decide cumulative vs newly recorded for yearly trends over a condition. Returns True when ambiguous."""
+    if _trend_years(criteria) is None:
+        return False
+    if not any(item.get("type") == "condition" and not item.get("exclude")
+               for item in _leaves(criteria.get("population", {}).get("items", []))):
+        return False
+    incidence, cumulative = bool(_INCIDENCE.search(text)), bool(_CUMULATIVE.search(text))
+    mode = "new" if incidence and not cumulative else "cumulative"
+    # Ask only when the wording is genuinely about timing: "diagnosed" or a diagnosis word next to a period. A plain
+    # "diabetes diagnoses over time" keeps the default (cumulative), stated on the card.
+    has_period = bool(_PERIOD_CUE_RE.search(text) and re.search(r"\b(?:19|20)\d{2}\b", text))
+    ambiguous = (not incidence and not cumulative
+                 and bool(re.search(r"\bdiagnosed\b", text, re.I) or (has_period and re.search(r"\bdiagnos", text, re.I))))
+    criteria.update(apply_diagnosis_timing(criteria, mode))
+    assumptions.append(DIAGNOSIS_TIMING_TEXT[mode] + (" Please confirm." if ambiguous else ""))
+    return ambiguous
 
 
 def _is_hospital_stay(text, start):
@@ -939,8 +1013,19 @@ def interpret_question(text: str) -> Interpretation:
         criteria["purpose_hint"] = " ".join(purpose_sentences)
     for period_start, period_end, _ in periods:
         recognised_spans.append((period_start, period_end))
+    timing_ambiguous = _diagnosis_timing(text, criteria, assumptions)
     unrecognised = _unrecognised_tokens(text, recognised_spans)
     problems, clarifications = _review_interpretation(text, criteria, unrecognised, assumptions)
+    if timing_ambiguous:
+        clarifications.append({
+            "id": "diagnosis_timing",
+            "question": "Per year, which patients do you mean?",
+            "options": [
+                ("Patients with a documented diagnosis by 31 December of each year (cumulative)", {"diagnosis_timing": "cumulative"}),
+                ("Patients first diagnosed within each year (newly recorded)", {"diagnosis_timing": "new"}),
+            ],
+            "note": "Cumulative counts grow over time; newly recorded counts show how many were added each year.",
+        })
     return Interpretation(problems=problems, clarifications=clarifications,
         
         criteria=criteria,

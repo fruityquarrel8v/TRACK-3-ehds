@@ -1,4 +1,4 @@
-# Compliance audit — AIM Health Data Navigator (Track 3, EHDS)
+# Compliance audit — HealthCare Rocket 🚀 (Track 3, EHDS)
 
 Audit of the prototype as pushed on branch `devin/1793301500-ehds-prototype` (commit 2efbd65). Every finding below was
 produced by running the real backend (`ehds_hdab.pipeline.process_request`) on the official synthetic data in a fresh

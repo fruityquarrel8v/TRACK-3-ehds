@@ -180,8 +180,10 @@ def explanation(plan):
         measure = (f"{measure} per {plan['x_label'].split(' (')[0]}, using each patient's latest value")
     parts = [f"Shows the {measure} among {plan['population'].rstrip('.')}."]
     if plan["time_axis"]:
-        parts.append("Each calendar year is evaluated separately: diagnoses recorded by 31 December of that year "
-                     "(or within it for new cases), medication status on 31 December, the latest laboratory value "
+        timing = ("diagnoses first recorded within that year (newly recorded patients)" if "newly" in str(plan).casefold()
+                  else "diagnoses recorded by 31 December of that year (cumulative, documented patients)")
+        parts.append(f"Each calendar year is evaluated separately: {timing}, medication status on 31 December, the "
+                     "latest laboratory value "
                      "within the year and hospital stays within the year; age is as of 31 December 2025.")
     elif plan["period"] and plan["period"] != "No time period applied.":
         parts.append(f"Time period: {plan['period']}.")
