@@ -251,7 +251,8 @@ def test_legitimate_public_health_requests_are_not_rejected(text):
         "purpose": text,
         "question": text,
     })
-    assert decision.decision == "APPROVE_STATISTICAL", decision.triggered_rules
+    assert decision.decision != "REJECT", decision.triggered_rules
+    assert decision.decision in ("APPROVE_STATISTICAL", "REVIEW_REQUIRED")
 
 
 _PROHIBITED_ART54_CASES = [
@@ -335,6 +336,9 @@ def test_unmatched_purpose_requires_staff_review_and_is_explicit():
     assert decision.purpose_category == ""
     assert "No prohibited purpose was found" in decision.reason
     assert "not matched to a specific Art. 53 category" in decision.reason
+    assert decision.decision == "REVIEW_REQUIRED"
+    assert response["decision"] == "REVIEW_REQUIRED"
+    assert response["answer"] is None and response["spe"] is None
     assert response["needs_staff_review"] is True
 
 

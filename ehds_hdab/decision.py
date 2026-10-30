@@ -150,7 +150,8 @@ def _purpose_categories(request):
     categories = []
     for pattern, label in (
         (r"\bresearch|study\b", "scientific research"),
-        (r"\bpublic health|prevention\b", "public health"),
+        (r"\bpublic health|prevention\b|\b(?:prevalence|incidence|epidemiolog\w*|vaccinat\w*|immuni[sz]\w*|"
+         r"disease surveillance|disease burden|burden of \w+|screening programmes?)\b", "public health"),
         (r"\bpolicy|guideline|quality programme|quality program\b", "policy-making"),
         (r"\bofficial statistics|annual health report\b", "official statistics"),
         (r"\bteach|teaching|education|training module\b", "education/teaching"),
@@ -163,19 +164,29 @@ def _purpose_categories(request):
             r"(?:train\w*|develop\w*|validat\w*|test\w*|build\w*)\b",
             "training/testing algorithms",
         ),
-        (r"\bimprov\w* care|earlier intervention|quality programme|quality program\b", "improving care"),
+        (r"\bimprov\w* care|earlier intervention|quality programme|quality program\b|"
+         r"\b(?:quality reports?|clinical audit|patient outcomes|worse outcomes|better outcomes|quality of care)\b",
+         "improving care"),
     ):
         if re.search(pattern, text) and label not in categories:
             categories.append(label)
     return categories
 
 
+PERMITTED_PURPOSES = (
+    "scientific research, public health, policy-making, official statistics, education or teaching, "
+    "training or testing algorithms, improving care"
+)
+UNRESOLVED_PURPOSE_REASON = (
+    "No prohibited purpose was found, but the purpose was not matched to a specific Art. 53 category "
+    f"({PERMITTED_PURPOSES}). Eligibility cannot be established automatically, so no data is released until a "
+    "staff member has assessed the purpose or the applicant states a permitted purpose."
+)
+
+
 def _purpose_statement(categories):
     if not categories:
-        return (
-            "No prohibited purpose was found, and the purpose was not matched to a "
-            "specific Art. 53 category; staff review is required."
-        )
+        return UNRESOLVED_PURPOSE_REASON
     joined = " and ".join(categories)
     if len(categories) == 1:
         return f"{joined.capitalize()} is an allowed purpose (Art. 53)."
@@ -228,6 +239,9 @@ def decide(request):
         return Decision("REJECT", ["54"], reason_text[prohibited], "prohibited purpose", [prohibited])
     requested_as = str(request.get("requested_as", "")).strip().casefold()
     categories = _purpose_categories(request)
+    if not categories:
+        # Absence of a prohibited purpose is not evidence of a permitted one: hold the request, release nothing.
+        return Decision("REVIEW_REQUIRED", ["53"], UNRESOLVED_PURPOSE_REASON, "", ["purpose_not_established"])
     purpose_statement = _purpose_statement(categories)
     category_text = " and ".join(categories)
     if requested_as == "health data request":

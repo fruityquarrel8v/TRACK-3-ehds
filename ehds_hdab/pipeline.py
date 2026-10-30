@@ -12,6 +12,9 @@ from .privacy import apply_small_cell, check_statistical_output
 from .spe import create_workspace
 
 
+RELEASING_DECISIONS = ("APPROVE_STATISTICAL", "APPROVE_SPE")
+
+
 def reset_query_history():
     disclosure.reset_ledger()
 
@@ -87,6 +90,14 @@ def process_request(request):
         warnings = []
         privacy_check = None
         withheld = False
+    elif decision.decision == "REVIEW_REQUIRED":
+        # Parsed so that staff can see what would be computed, but nothing is executed, released or ledgered.
+        plan = parse_request(request)
+        answer = None
+        spe_info = None
+        warnings = list(plan.warnings)
+        privacy_check = None
+        withheld = False
     else:
         plan = parse_request(request)
         for warning in _condition_source_warnings(plan, data):
@@ -134,12 +145,16 @@ def process_request(request):
         decision.decision != "REJECT"
         and bool(warnings or plan.empty or not decision.purpose_category)
     )
+    if decision.decision not in RELEASING_DECISIONS:
+        # Release gate independent of the UI: only an approval may carry results or a workspace.
+        answer, spe_info = None, None
     response = {
         "request_id": request.get("id"),
         "decision": decision.decision,
         "articles": sorted(decision.articles, key=str),
         "reason": decision.reason,
         "purpose_category": decision.purpose_category,
+        "triggered_rules": list(decision.triggered_rules),
         "answer": answer,
         "query_plan": plan.to_dict(),
         "spe": spe_info,

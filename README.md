@@ -157,6 +157,7 @@ request JSON
    │
    ▼
 decision.py ── Art. 54 prohibited purpose? ──yes──► REJECT (Art. 54)
+   ├─ purpose matches no Art. 53 category ──────► REVIEW_REQUIRED (Art. 53): nothing computed or released
    │ no
    ├─ "health data request" ────────────────────► APPROVE_STATISTICAL (Art. 53, 69)
    ├─ access application + justified need for records ► APPROVE_SPE (Art. 53, 66, 68, 73)
@@ -203,7 +204,7 @@ data.py (pandas, opted-out patients removed from all 5 tables at load time)
 ## What works and what does not
 
 - Works: all 10 example requests; new requests with other conditions, medications, lab values, encounter filters (incl. main diagnosis `primary_icd10`), grouping by hospital/sex/age band/region, ratio definitions, and decision wording beyond the examples (tested in `tests/`).
-- Limits: trends are per calendar year only (no monthly results; age is as of 31 December 2025 for every year); the guided builder shows one level of AND/OR grouping (deeper nesting only via the JSON input); the disclosure ledger compares count cells for nested populations differing by 1–9 patients, not percentages, means or combinations of three or more queries. The parser understands the definition style used in the challenge requests, not arbitrary prose; unusual phrasing produces a staff-review warning. Art. 54 detection is keyword/pattern based, so a cleverly disguised purpose could pass and needs a human reviewer. The SPE is a simulation (a locked folder + blocked export API), not a real isolated compute environment.
+- Limits: trends are per calendar year only (no monthly results; age is as of 31 December 2025 for every year); the guided builder shows one level of AND/OR grouping (deeper nesting only via the JSON input); the disclosure ledger compares count cells for nested populations differing by 1–9 patients, not percentages, means or combinations of three or more queries. The parser understands the definition style used in the challenge requests, not arbitrary prose; unusual phrasing produces a staff-review warning. Art. 54 detection is keyword/pattern based, so a cleverly disguised purpose could pass and needs a human reviewer. A purpose that matches neither Art. 54 nor an Art. 53 category is held as `REVIEW_REQUIRED` and releases nothing; the staff dashboard shows such requests but has no approve/reject action yet, so the hold is final within the prototype. The SPE is a simulation (a locked folder + blocked export API), not a real isolated compute environment.
 
 
 ---

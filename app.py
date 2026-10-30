@@ -39,6 +39,7 @@ ARTICLES = {
 }
 DECISION_STYLE = {
     "REJECT": ("error", "Request rejected"),
+    "REVIEW_REQUIRED": ("warning", "Review required: no data released"),
     "APPROVE_STATISTICAL": ("success", "Approved for statistics"),
     "APPROVE_SPE": ("info", "Approved for the secure processing environment"),
 }
@@ -109,11 +110,24 @@ def show_response(resp, staff=False):
     st.markdown(f"**Reason:** {resp['reason']}")
     st.markdown("**Legal basis:**")
     show_articles(resp.get("articles"))
-    if resp.get("needs_staff_review") and not resp.get("withheld"):
-        st.warning("Parts of this request could not be interpreted automatically. A staff member will review it.")
+    rules = resp.get("triggered_rules") or []
+    if resp["decision"] == "REVIEW_REQUIRED":
+        st.markdown("**What you can do:** describe a permitted purpose in your own words, for example scientific "
+                    "research, public health, policy-making, official statistics, teaching, training or testing an "
+                    "algorithm, or improving care, and say what the results will be used for. Then submit again. "
+                    "Otherwise a staff member will assess the request as submitted.")
+    elif resp.get("needs_staff_review") and not resp.get("withheld"):
+        st.info("Parts of this request were answered using the documented default assumptions listed in the notes "
+                "below. The request is flagged for staff attention; the released numbers follow the same privacy rules.")
     elif resp.get("withheld"):
         st.caption("A staff member will review this release decision.")
+    if "statistics_sufficient" in rules:
+        st.info("You asked for pseudonymised records in a secure processing environment. That access was **not** "
+                "granted: the stated purpose does not explain why anonymised statistics are insufficient (Art. 66), "
+                "so the request was answered with anonymised statistics instead.")
     answer = resp.get("answer")
+    if resp["decision"] not in ("APPROVE_STATISTICAL", "APPROVE_SPE"):
+        answer = None
     if resp.get("withheld"):
         reason = next(
             (
@@ -1007,6 +1021,9 @@ EXAMPLE_QUESTIONS = [
 ]
 DECISION_EXPLANATIONS = {
     "REJECT": "Your request cannot be approved. EHDS Article 54 prohibits this purpose, so no data is released.",
+    "REVIEW_REQUIRED": "Your request is on hold. The purpose you stated could not be matched to one of the permitted "
+                       "purposes in EHDS Article 53, so it has to be assessed by a staff member before anything is "
+                       "released. No statistics have been computed or released.",
     "APPROVE_STATISTICAL": "Your request is approved for anonymised statistics. Only aggregated, privacy-checked "
                            "numbers are released; groups with fewer than 10 patients are hidden.",
     "APPROVE_SPE": "Your request is approved for a secure processing environment: a locked workspace where approved "
@@ -1528,6 +1545,9 @@ def _screen_review():
     country = c3.text_input("Country", "AT", key="review_country")
     purpose = st.text_area("Research purpose", key="review_purpose",
                            placeholder="e.g. Public-health research on diabetes care quality to plan prevention programmes.")
+    st.caption("Say which permitted purpose applies (scientific research, public health, policy-making, official "
+               "statistics, teaching, training or testing an algorithm, improving care) and what the results will be "
+               "used for. A purpose that cannot be matched is put on hold for staff assessment and releases nothing.")
     request_type = st.selectbox("What do you need?", list(REQUEST_TYPES), key="review_request_type")
     requested_as = REQUEST_TYPES[request_type]
     record_types = []
@@ -1581,7 +1601,7 @@ def _screen_result():
     if not resp:
         _go("welcome")
         return
-    approved = resp["decision"] != "REJECT"
+    approved = resp["decision"] in ("APPROVE_STATISTICAL", "APPROVE_SPE")
     _flow_strip(active=3)
     _title("Safe answer", "Your research results" if approved else "Decision on your request")
     if resp.get("withheld"):
