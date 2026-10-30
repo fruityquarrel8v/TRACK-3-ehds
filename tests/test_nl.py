@@ -372,3 +372,15 @@ def test_all_official_questions_are_safe_to_interpret():
         request = json.loads(path.read_text(encoding="utf-8"))
         interpretation = interpret_question(request.get("question", ""))
         assert interpretation is not None
+
+
+def test_excluding_region_is_an_exclusion():
+    from ehds_hdab.nl import interpret_question
+
+    criteria = interpret_question(
+        "How many women with breast cancer are there in Austria, excluding Burgenland?").criteria
+    items = criteria["population"]["items"]
+    region = next(item for item in items if item["type"] == "region")
+    assert region["values"] == ["Burgenland"] and region.get("exclude") is True
+    assert any(item["type"] == "sex" and item["value"] == "female" for item in items)
+    assert any(item["type"] == "condition" and item["icd10"] == ["C50"] for item in items)

@@ -16,7 +16,7 @@ _STOPWORDS = {
     "having", "have", "health", "how", "hospital", "hospitalised",
     "hospitalized", "hospitalisation", "hospitalisations", "hospitalization",
     "hospitalizations", "in", "include", "incident", "inpatient", "is",
-    "individuals", "groups", "group", "latest", "level", "levels", "less", "male", "males",
+    "individuals", "groups", "group", "latest", "austria", "excluding", "level", "levels", "less", "male", "males",
     "many", "mean",
     "measurement", "measurements", "men", "never", "new", "newly", "no", "not",
     "number", "of", "on", "or", "overall", "older", "over", "patients",
@@ -205,9 +205,10 @@ def _is_excluded(text, start):
     return bool(
         re.search(
             r"\b(?:without|no|never\s+(?:been\s+)?prescribed|"
-            r"(?:(?:who\s+)?do\s+not\s+take)|"
+            r"(?:(?:who\s+)?do\s+not\s+take)|excluding|exclude|except(?:\s+for)?|"
+            r"other\s+than|outside(?:\s+of)?|not\s+(?:in|from)|"
             r"not\s+(?:on|taking|prescribed))"
-            r"\s+(?:(?:a|an|any)\s+)?$",
+            r"\s+(?:(?:a|an|any|the)\s+)?$",
             before,
             re.I,
         )

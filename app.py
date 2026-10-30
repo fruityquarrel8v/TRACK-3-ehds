@@ -17,6 +17,7 @@ from ehds_hdab.data import load_data
 from ehds_hdab.nl import interpret_question
 from ehds_hdab.pipeline import process_request
 from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
+from ehds_hdab import disclosure
 from ehds_hdab.viz import answer_table, interpret_chart_command, methodology_text, render_chart
 from ehds_hdab.terminology import display_name, entries
 
@@ -1455,6 +1456,68 @@ def _advanced_options(examples):
         _go("result")
 
 
+DEMO_APPLICANT = {"name": "Dr. Demo Researcher", "organisation": "Vienna Cancer Research Group (university)",
+                  "country": "AT"}
+DEMO_SCENARIOS = [
+    ("1. A legitimate question", "How many women with breast cancer are there in Austria?",
+     "Scientific research on breast cancer care to plan regional screening services.",
+     "The assistant interprets the question, checks the purpose and releases an anonymised count."),
+    ("2. The same question, one region removed",
+     "How many women with breast cancer are there in Austria, excluding Burgenland?",
+     "Scientific research on breast cancer care to plan regional screening services.",
+     "Both counts pass the small-cell rule on their own, but their difference would reveal how many "
+     "patients live in the excluded region. The ledger notices and withholds the result."),
+    ("3. An ambiguous question",
+     "How many adults with atrial fibrillation take an oral anticoagulant?",
+     "Public health research on anticoagulation in atrial fibrillation.",
+     "\"Take\" does not say whether the prescription must be current. The assistant asks instead of guessing."),
+    ("4. A prohibited purpose", "How many adults have type 2 diabetes, by region?",
+     "We want to adjust health insurance premiums for people with diabetes by region.",
+     "The purpose falls under EHDS Art. 54, so the request is rejected before any data is touched."),
+]
+
+
+def page_demo():
+    st.markdown(STYLE, unsafe_allow_html=True)
+    st.header("Demo scenarios")
+    st.write("Four prepared scenarios for the judges. Every button runs the real pipeline on the synthetic data; "
+             "nothing is pre-recorded. Message: *following a privacy rule is not always the same as protecting privacy.*")
+    c1, c2 = st.columns([3, 1])
+    c1.caption(f"Disclosure ledger: {len(disclosure.ledger_summary())} recorded cells. Scenario 2 only triggers "
+               "after scenario 1 has released its count.")
+    if c2.button("Reset demo state", key="demo_reset"):
+        disclosure.reset_ledger()
+        for key in list(st.session_state.get("decisions", {})):
+            if str(key).startswith("DEMO-"):
+                st.session_state["decisions"].pop(key, None)
+        st.success("Ledger reset.")
+    for index, (title, question, purpose, message) in enumerate(DEMO_SCENARIOS, start=1):
+        with st.container(border=True):
+            st.markdown(f"**{title}**")
+            st.markdown(f"Question: \u201c{question}\u201d  \nPurpose: \u201c{purpose}\u201d")
+            st.caption(message)
+            interpretation = interpret_question(question)
+            if index == 3:
+                st.info("Clarification the assistant asks: \"When you say *taking Oral anticoagulant*, do you mean "
+                        "an active prescription on 31 December 2025 or anyone ever prescribed it?\" "
+                        "Assumption if unanswered: " + "; ".join(interpretation.assumptions))
+            if st.button("Run scenario", key=f"demo_run_{index}"):
+                request = {
+                    "id": f"DEMO-{index}", "applicant": DEMO_APPLICANT,
+                    "requested_as": "health data request", "requested_format": "anonymised statistics",
+                    "purpose": purpose, "question": question,
+                    "definitions": criteria_to_definitions(interpretation.criteria),
+                    "criteria": interpretation.criteria,
+                }
+                with st.spinner("Running through the real pipeline..."):
+                    resp = process_request(request)
+                store(resp, request)
+            resp = st.session_state.get("decisions", {}).get(f"DEMO-{index}")
+            if resp:
+                st.write(DECISION_EXPLANATIONS.get(resp["decision"], ""))
+                show_response(resp)
+
+
 def page_staff():
     st.header("Staff dashboard")
     if st.button("Process all example requests"):
@@ -1475,6 +1538,23 @@ def page_staff():
         st.dataframe(overview, hide_index=True, width="stretch")
         rid = st.selectbox("Inspect request", list(decisions))
         show_response(decisions[rid], staff=True)
+    st.subheader("Disclosure ledger")
+    st.caption("Every released count is remembered (with one-way hashes of the patient IDs, never the IDs) so that "
+               "a new result that would reveal a small group by subtraction can be withheld.")
+    ledger = disclosure.ledger_summary()
+    if ledger:
+        rows = [{"request": e.get("request_id"), "cell": " / ".join(map(str, e.get("path") or [])),
+                 "metric": e.get("metric"), "released value": e.get("released"), "status": e.get("status"),
+                 "time": str(e.get("timestamp", ""))[:19]} for e in ledger[::-1]]
+        st.dataframe(pd.DataFrame(rows).astype(str), hide_index=True, use_container_width=True)
+    else:
+        st.caption("Empty.")
+    with st.expander("Administrative actions (demo only)"):
+        st.caption("Resetting the ledger forgets what has been released. Only for demonstrations; a production "
+                   "HDAB would never reset its disclosure history.")
+        if st.button("Reset disclosure ledger", key="staff_reset_ledger"):
+            disclosure.reset_ledger()
+            st.success("Disclosure ledger reset.")
     st.subheader("Audit log")
     log = Path(config.AUDIT_LOG)
     if log.exists():
@@ -1530,7 +1610,7 @@ def page_evaluation():
 
 
 warm_data()
-PAGES = {"Research assistant": page_applicant, "Staff dashboard": page_staff,
+PAGES = {"Research assistant": page_applicant, "Demo scenarios": page_demo, "Staff dashboard": page_staff,
          "Secure processing environment": page_spe, "Evaluation": page_evaluation}
 st.sidebar.title("EHDS Health Data Access Body")
 st.sidebar.caption("Simulated HDAB for AIM Hackathon Vienna 2026, Track 3. Synthetic data only.")

@@ -195,3 +195,24 @@ def test_rejected_request_is_explained():
     assert any("Article 54" in m.value or "Art. 54" in m.value for m in at.markdown) or any(
         "Decision on your request" in m.value for m in at.markdown)
     assert not at.dataframe
+
+
+def test_demo_scenarios_show_differencing_protection():
+    at = _app()
+    at.sidebar.radio[0].set_value("Demo scenarios")
+    at.run()
+    assert not at.exception
+    at.button(key="demo_reset").click()
+    at.run()
+    at.button(key="demo_run_1").click()
+    at.run()
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert not any("Results withheld" in w.value for w in at.warning)
+    at.button(key="demo_run_2").click()
+    at.run()
+    assert not at.exception
+    assert any("cannot be released safely" in w.value for w in at.warning)
+    assert any("What you can do instead" in m.value for m in at.markdown)
+    at.button(key="demo_run_4").click()
+    at.run()
+    assert any("REJECT" in e.value for e in at.error)
