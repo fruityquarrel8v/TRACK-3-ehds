@@ -1043,7 +1043,7 @@ p, li, label, .stMarkdown {color: var(--text);}
 .hdn-brand .s {font-size: .85rem; color: var(--muted); margin-top: .15rem;}
 .hdn-eu {display: flex; align-items: center; gap: .6rem; font-size: .68rem; font-weight: 700; letter-spacing: .06em;
          color: var(--info); text-transform: uppercase; line-height: 1.25;}
-.eyebrow {font-size: .74rem; font-weight: 700; letter-spacing: .16em; color: var(--primary); text-transform: uppercase;
+.eyebrow {font-size: .74rem; font-weight: 700; letter-spacing: .16em; color: var(--primary-text); text-transform: uppercase;
           margin: .2rem 0 .3rem 0;}
 .hero h1 {font-size: 2.35rem; font-weight: 800; color: var(--text); margin: 0 0 .5rem 0; line-height: 1.15;}
 .hero p {color: var(--muted); font-size: 1.05rem; margin: 0 0 1rem 0; max-width: 640px;}
@@ -1052,39 +1052,40 @@ p, li, label, .stMarkdown {color: var(--text);}
 div[data-testid="stTextArea"] textarea, div[data-testid="stTextInput"] input {border-radius: 14px; font-size: 1.02rem;
         background: var(--surface); color: var(--text);}
 div[data-testid="stTextArea"] textarea {padding: 1rem; border: 1px solid var(--border);
-        box-shadow: 0 6px 24px rgba(196, 71, 121, .06);}
+        box-shadow: 0 6px 24px rgba(25, 59, 70, .05);}
 div[data-testid="stTextArea"] textarea:focus, div[data-testid="stTextInput"] input:focus {border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(108, 132, 201, .35);}
+        box-shadow: 0 0 0 3px rgba(38, 157, 155, .30);}
 div.stButton > button, div.stDownloadButton > button {border-radius: 12px; padding: .55rem 1.15rem; font-weight: 600;
         border: 1px solid var(--border); color: var(--text); background: var(--surface); transition: background .15s, border-color .15s;}
-div.stButton > button:hover, div.stDownloadButton > button:hover {background: var(--lavender-tint); border-color: var(--secondary);
+div.stButton > button:hover, div.stDownloadButton > button:hover {background: var(--mint); border-color: var(--turquoise);
         color: var(--text);}
-div.stButton > button:active {background: #E6DDFB;}
-.st-key-example_chips div.stButton > button {background: var(--lavender-tint); border-color: #E3DBFA; border-radius: 999px;
+div.stButton > button:active {background: #D3F0ED;}
+.st-key-example_chips div.stButton > button {background: var(--pale-rose); border-color: var(--powder); border-radius: 999px;
         font-weight: 600; color: var(--text);}
-.st-key-example_chips div.stButton > button:hover {background: var(--pink-tint); border-color: var(--brand);}
+.st-key-example_chips div.stButton > button:hover {background: var(--mint); border-color: var(--primary);}
 div.stButton > button:disabled {color: var(--muted); background: #F6F1F4; border-color: var(--border);}
-div.stButton > button[kind="primary"] {background: var(--primary); border-color: var(--primary); color: #fff;}
-div.stButton > button[kind="primary"]:hover {background: var(--primary-hover); border-color: var(--primary-hover); color: #fff;}
-div.stButton > button[kind="primary"]:active {background: var(--primary-active); border-color: var(--primary-active);}
+div.stButton > button[kind="primary"] {background: var(--button); border-color: var(--button); color: #fff;}
+div.stButton > button[kind="primary"] *, div.stButton > button[kind="primary"]:hover * {color: #fff !important;}
+div.stButton > button[kind="primary"]:hover {background: var(--button-hover); border-color: var(--button-hover); color: #fff;}
+div.stButton > button[kind="primary"]:active {background: var(--button-active); border-color: var(--button-active);}
 div.stButton > button:focus-visible, div.stDownloadButton > button:focus-visible,
 div[data-testid="stButtonGroup"] button:focus-visible {outline: 3px solid var(--focus); outline-offset: 2px; box-shadow: none;}
 div[data-testid="stButtonGroup"] button {border-radius: 10px; color: var(--text); font-weight: 600; padding: .3rem .9rem;
         border: 1px solid var(--border); background: var(--surface);}
-div[data-testid="stButtonGroup"] button:hover {background: var(--lavender-tint); color: var(--text);}
+div[data-testid="stButtonGroup"] button:hover {background: var(--mint); color: var(--text);}
 div[data-testid="stButtonGroup"] button[aria-checked="true"], div[data-testid="stButtonGroup"] button[data-testid$="Active"]
-        {background: var(--pink-tint); color: var(--primary); border-color: var(--primary); font-weight: 700;}
+        {background: var(--mint); color: var(--primary-text); border-color: var(--primary); font-weight: 700;}
 .card {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 1.2rem 1.3rem;
-       box-shadow: 0 6px 22px rgba(24, 35, 66, .05); margin-bottom: 1rem;}
+       box-shadow: 0 6px 22px rgba(25, 59, 70, .05); margin-bottom: 1rem;}
 .card .head {display: flex; align-items: center; gap: .7rem; margin-bottom: .25rem;}
 .card .head .chk {width: 30px; height: 30px; border-radius: 50%; background: var(--success-tint); color: var(--success);
                   display: inline-flex; align-items: center; justify-content: center; flex: none;}
 .card h3 {margin: 0; font-size: 1.25rem; color: var(--text); font-weight: 800;}
 .card .lead {color: var(--muted); font-size: .92rem; margin: 0 0 .9rem 0;}
-.card .row {display: flex; align-items: center; gap: .9rem; background: var(--lavender-tint); border-radius: 14px;
+.card .row {display: flex; align-items: center; gap: .9rem; background: var(--mint); border-radius: 14px;
             padding: .7rem .9rem; margin-bottom: .5rem; border: 1px solid transparent;}
-.card .row .ic {width: 34px; height: 34px; border-radius: 10px; background: var(--surface); color: var(--primary); flex: none;
-                display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(24,35,66,.08);}
+.card .row .ic {width: 34px; height: 34px; border-radius: 10px; background: var(--surface); color: var(--primary-text); flex: none;
+                display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(25,59,70,.08);}
 .card .row .k {color: var(--muted); font-size: .8rem; margin-bottom: .1rem;}
 .card .row .v {color: var(--text); font-weight: 700; font-size: 1rem;}
 .card .row .d {display: block; color: var(--muted); font-size: .8rem; font-weight: 400; margin-top: .1rem;}
@@ -1094,24 +1095,24 @@ div[data-testid="stButtonGroup"] button[aria-checked="true"], div[data-testid="s
                 display: inline-flex; align-items: center; justify-content: center;}
 .banner-ok b {color: #176B45; display: block; font-size: .95rem;}
 .banner-ok span {color: #3F6B55; font-size: .85rem;}
-.result-card {background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--primary);
+.result-card {background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--pink);
               border-radius: 18px; padding: 1rem 1.3rem; margin: .4rem 0 1rem 0; max-width: 360px;
-              box-shadow: 0 6px 22px rgba(24, 35, 66, .05);}
+              box-shadow: 0 6px 22px rgba(25, 59, 70, .05);}
 .result-card .k {color: var(--muted); font-size: .85rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;}
 .result-card .v {color: var(--text); font-size: 2.3rem; font-weight: 800; line-height: 1.1; margin: .2rem 0;}
 .result-card .d {color: var(--muted); font-size: .85rem;}
 .strip {display: flex; gap: 1.2rem; margin: 1.2rem 0 .6rem 0; flex-wrap: wrap;}
 .strip .st {flex: 1 1 200px; min-width: 180px;}
 .strip .num {display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
-             border-radius: 50%; background: var(--lavender-tint); color: var(--text); font-weight: 800; margin-right: .6rem;
+             border-radius: 50%; background: var(--mint); color: var(--text); font-weight: 800; margin-right: .6rem;
              border: 2px solid transparent;}
-.strip .num.on {background: var(--primary); color: #fff; box-shadow: 0 0 0 4px var(--pink-tint);}
+.strip .num.on {background: var(--button); color: #fff; box-shadow: 0 0 0 4px var(--mint);}
 .strip .num.done {background: var(--success-tint); color: var(--success); border-color: var(--success);}
 .strip .ti {font-weight: 800; color: var(--text); margin-top: .6rem; font-size: 1.02rem;}
-.strip .on-label {color: var(--primary); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+.strip .on-label {color: var(--primary-text); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
                   margin-left: .4rem;}
 .strip .tx {color: var(--muted); font-size: .9rem; line-height: 1.4;}
-.strip .icon {color: var(--accent); vertical-align: middle;}
+.strip .icon {color: var(--primary); vertical-align: middle;}
 .howbox {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 1rem 1.2rem; margin-top: 1rem;}
 .howbox .h {font-weight: 700; color: var(--text); margin-bottom: .6rem;}
 .howbox .cols {display: flex; gap: 1.5rem; flex-wrap: wrap;}
@@ -1120,18 +1121,18 @@ div[data-testid="stButtonGroup"] button[aria-checked="true"], div[data-testid="s
 .howbox .col span {color: var(--muted); font-size: .9rem; line-height: 1.45;}
 .steps {display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; color: var(--muted);
         margin: .2rem 0 1.1rem 0; font-size: .92rem;}
-.steps .n {display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--lavender-tint);
+.steps .n {display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--mint);
            align-items: center; justify-content: center; font-weight: 700; color: var(--text); margin-right: .35rem;}
-.steps .on .n {background: var(--primary); color: #fff;}
+.steps .on .n {background: var(--button); color: #fff;}
 .steps .on {color: var(--text); font-weight: 700;}
 .steps .sep {color: var(--border); margin: 0 .3rem;}
 .quiet {color: var(--muted); font-size: .82rem;}
 section[data-testid="stSidebar"] {background: var(--surface); border-right: 1px solid var(--border);}
 section[data-testid="stSidebar"] div[role="radiogroup"] label {padding: .5rem .8rem; border-radius: 12px;
         margin-bottom: .15rem; color: var(--text); font-weight: 600;}
-section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {background: var(--pink-tint); color: var(--primary);}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {background: var(--pale-rose); color: var(--text);}
 section[data-testid="stSidebar"] .side-foot {color: var(--muted); font-size: .9rem; margin-top: 2rem;
-        border-top: 3px solid var(--primary); padding-top: .6rem; max-width: 150px;}
+        border-top: 3px solid var(--pink); padding-top: .6rem; max-width: 150px;}
 div[data-testid="stAlert"] {border-radius: 14px;}
 div[data-testid="stMetric"] {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: .8rem 1rem;}
 div[data-testid="stExpander"] {border-radius: 14px; border-color: var(--border); background: var(--surface);}
