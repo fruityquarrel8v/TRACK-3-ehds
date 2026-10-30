@@ -183,7 +183,7 @@ def test_advanced_example_request_and_chart():
     chart_input.set_value("bar chart of prevalence by region")
     at.run()
     assert not at.exception
-    assert any(button.label == "Download chart (PNG)" for button in at.get("download_button"))
+    assert not at.get("download_button")  # exports hidden for the demo (EHDS_ENABLE_EXPORTS unset)
     chart_input = next(widget for widget in at.text_input if widget.label == "Refine the chart in your own words")
     chart_input.set_value("histogram of HbA1c")
     at.run()

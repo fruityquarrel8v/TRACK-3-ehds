@@ -6,6 +6,7 @@ Patient-level data never leaves this machine; no external services are called.
 import base64
 import copy
 import json
+import os
 from pathlib import Path
 import re
 
@@ -43,6 +44,10 @@ DECISION_STYLE = {
     "APPROVE_STATISTICAL": ("success", "Approved for statistics"),
     "APPROVE_SPE": ("info", "Approved for the secure processing environment"),
 }
+# Export buttons are hidden for the demo (the PNG export was unreliable in some browsers); set EHDS_ENABLE_EXPORTS=1
+# to show them again. Tables, charts and all calculations are unaffected.
+EXPORTS_ENABLED = os.environ.get("EHDS_ENABLE_EXPORTS", "").lower() in ("1", "true", "yes")
+
 PROTOTYPE_DISCLAIMER = (
     "Prototype: decisions are generated automatically for demonstration and are not legally binding "
     "decisions of a Health Data Access Body."
@@ -147,8 +152,9 @@ def show_response(resp, staff=False):
         st.caption("Small-cell rule: counts below 10 are shown as `<10`; percentages and means based on fewer "
                    "than 10 patients are `suppressed`. Patients who opted out (Art. 71) are excluded. "
                    "Values are rounded to one decimal, halves up.")
-        st.download_button("Download statistics (JSON)", json.dumps(answer, indent=2, ensure_ascii=False),
-                           file_name=f"{resp['request_id']}_statistics.json", mime="application/json")
+        if EXPORTS_ENABLED:
+            st.download_button("Download statistics (JSON)", json.dumps(answer, indent=2, ensure_ascii=False),
+                               file_name=f"{resp['request_id']}_statistics.json", mime="application/json")
         if not staff:
             _chart_section(resp)
     elif resp["decision"] == "APPROVE_SPE":
@@ -327,8 +333,9 @@ def _chart_section(resp):
     frame, spec = png_table_and_spec(plan)
     try:
         _, png = render_chart(frame, spec, plan["title"], population_text, period_text, "")
-        st.download_button("Download chart (PNG)", png, file_name=f"{rid}_chart.png", mime="image/png",
-                           key=f"chart_png_{rid}")
+        if EXPORTS_ENABLED:
+            st.download_button("Download chart (PNG)", png, file_name=f"{rid}_chart.png", mime="image/png",
+                               key=f"chart_png_{rid}")
     except ValueError:
         pass
     if st.button("Restore original chart", key=f"chart_restore_{rid}"):
