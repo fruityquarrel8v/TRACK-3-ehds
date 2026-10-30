@@ -323,7 +323,10 @@ def render_chart(table, spec, title, population_text, period_text, unit):
         for position, category in zip(positions, categories):
             annotate_missing(position, category)
 
-    axis.set_xticks(positions, categories)
+    if len(categories) > 6 or max((len(c) for c in categories), default=0) > 10:
+        axis.set_xticks(positions, categories, rotation=30, ha="right")
+    else:
+        axis.set_xticks(positions, categories)
     axis.set_xlabel(x_label)
     metric_label = str(metric)
     if unit and not re.search(r"\([^()]+\)\s*$", metric_label):
