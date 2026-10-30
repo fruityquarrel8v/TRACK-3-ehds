@@ -247,3 +247,27 @@ def test_chart_section_renders_and_refuses_histogram():
     chart_input.set_value("histogram of HbA1c")
     at.run()
     assert any("secure processing environment" in element.value for element in at.info)
+
+
+def test_builder_add_criterion_keeps_existing_selections():
+    at = _app()
+    at.selectbox(key="builder_new_category").set_value("Diagnosis")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert not at.exception
+    diagnosis = next(widget for widget in at.selectbox if widget.key == "builder_1_diagnosis")
+    t2d = next(option for option in diagnosis.options if option.startswith("Type 2 diabetes"))
+    diagnosis.set_value(t2d)
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Laboratory measurement")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert not at.exception
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    assert any("Type 2 diabetes" in element.value and "E11" in element.value for element in at.info)
+    assert not any("Asthma" in element.value for element in at.info)
+    at.button(key="builder_2_remove").click()
+    at.run()
+    assert not at.exception
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    assert not any(widget.key == "builder_2_lab" for widget in at.selectbox)

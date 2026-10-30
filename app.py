@@ -555,7 +555,9 @@ def _builder_criterion_row(row, data, period_start, period_end):
             item for item in st.session_state["builder_criteria"]
             if item["id"] != row_id
         ]
-        st.rerun()
+        # Rerun only after every other row has rendered; a rerun here would drop their widget state.
+        st.session_state["builder_rerun_needed"] = True
+        return None
 
     if category == "Diagnosis":
         options = _builder_concepts(data, "condition")
@@ -1053,7 +1055,6 @@ def page_applicant():
                 "id": row_id,
                 "category": category,
             })
-            st.rerun()
 
         st.session_state.setdefault("builder_criteria", [])
         criterion_items = []
@@ -1263,6 +1264,8 @@ def page_applicant():
     if last:
         st.subheader(f"Decision for {last['request_id']}")
         show_response(last)
+    if st.session_state.pop("builder_rerun_needed", False):
+        st.rerun()
 
 
 def page_staff():
