@@ -96,7 +96,16 @@ Not implemented / future work:
 
 ## Team
 
-*To be completed with the team members and their contributions.*
+Laura, Christian, Sašo and Axel – AIM Healthcare Hackathon Vienna 2026, Track 3.
+
+| Member | Contribution |
+|---|---|
+| Laura | _to be filled in_ |
+| Christian | _to be filled in_ |
+| Sašo | Clinical lead: interpretation rules (hospitalisation, medication status, condition onset, lab thresholds), validation of mappings, product direction |
+| Axel | _to be filled in_ |
+
+Implementation support: Devin (AI software engineer), working from the team's briefs.
 
 ---
 
