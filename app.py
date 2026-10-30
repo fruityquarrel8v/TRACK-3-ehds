@@ -1062,6 +1062,9 @@ div[data-testid="stTextArea"] textarea, div[data-testid="stTextInput"] input {bo
 div[data-testid="stTextArea"] textarea {padding: 1rem; border: 1px solid var(--primary); box-shadow: none;}
 div[data-testid="stTextArea"] textarea:focus, div[data-testid="stTextInput"] input:focus {border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(231, 127, 168, .30);}
+/* Streamlit's hover toolbar on tables and charts ("Download as CSV/PNG", fullscreen) is hidden for the demo:
+   the browser-side PNG export was unreliable. Re-enable by removing this rule. */
+div[data-testid="stElementToolbar"] {display: none !important;}
 div.stButton > button, div.stDownloadButton > button {border-radius: 12px; padding: .55rem 1.15rem; font-weight: 600;
         border: 1px solid var(--border); color: var(--text); background: var(--surface); transition: background .15s, border-color .15s;}
 div.stButton > button:hover, div.stDownloadButton > button:hover {background: var(--pale-pink); border-color: var(--primary);
