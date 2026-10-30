@@ -16,7 +16,7 @@ _STOPWORDS = {
     "having", "have", "health", "how", "hospital", "hospitalised",
     "hospitalized", "hospitalisation", "hospitalisations", "hospitalization",
     "hospitalizations", "in", "include", "incident", "inpatient", "is",
-    "individuals", "latest", "level", "levels", "less", "male", "males",
+    "individuals", "groups", "group", "latest", "level", "levels", "less", "male", "males",
     "many", "mean",
     "measurement", "measurements", "men", "never", "new", "newly", "no", "not",
     "number", "of", "on", "or", "overall", "older", "over", "patients",
@@ -266,9 +266,9 @@ def _threshold(text, start, end):
 def _is_lab_outcome(text, start, end):
     before = text[max(0, start - 60):start].casefold()
     after = text[end:min(len(text), end + 60)].casefold()
-    if re.search(r"\b(?:mean|average|compare|distribution)\b", before):
+    if re.search(r"\b(?:mean|average|compare|distribution|trends?\s+(?:in|of))\b", before):
         return True
-    return bool(re.match(r"\s*(?:levels?|distribution)\b", after))
+    return bool(re.match(r"\s*(?:levels?|values?|distribution|trends?)\b", after))
 
 
 def _is_lab_presence(text, start, end):
@@ -358,7 +358,7 @@ def _gender_info(text):
 
 def _grouping(text, assumptions):
     groups = []
-    if re.search(r"\bby\s+(?:age(?:\s+(?:band|group))?|age\s*band)\b", text, re.I):
+    if re.search(r"\b(?:by|between|across|per)\s+(?:age(?:\s+(?:bands?|groups?))?|age\s*bands?)\b", text, re.I):
         groups.append({"dimension": "age_band", "bands": _AGE_BANDS})
         assumptions.append("Age-band results use 10-year bands.")
     if re.search(r"\b(?:by\s+sex|by\s+gender)\b", text, re.I):
@@ -447,6 +447,10 @@ def interpret_question(text: str) -> Interpretation:
     text = str(text or "")
     periods = _periods(text)
     assumptions = []
+    if re.search(r"\b(?:trends?|over\s+time|monthly|yearly|per\s+(?:year|month))\b", text, re.I):
+        assumptions.append(
+            "Trends over time are not available in this prototype; the result covers the whole selected period."
+        )
     nodes = []
     recognised_spans = []
     concept_spans = _concept_matches(text)

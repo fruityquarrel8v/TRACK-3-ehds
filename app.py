@@ -117,7 +117,7 @@ def show_response(resp, staff=False):
         st.warning(reason)
     elif resp["decision"] == "APPROVE_STATISTICAL" and answer:
         st.markdown("**Result (anonymised statistics)**")
-        st.dataframe(answer_to_frame(answer, (resp.get("query_plan") or {}).get("group_by", [])), hide_index=True, use_container_width=True)
+        st.dataframe(answer_to_frame(answer, (resp.get("query_plan") or {}).get("group_by", [])), hide_index=True, width="stretch")
         st.caption("Small-cell rule: counts below 10 are shown as `<10`; percentages and means based on fewer "
                    "than 10 patients are `suppressed`. Patients who opted out (Art. 71) are excluded. "
                    "Values are rounded to one decimal, halves up.")
@@ -797,475 +797,658 @@ def _criteria_period_summary(criteria):
     return "; ".join(labels)
 
 
-def page_applicant():
-    st.header("Applicant portal")
-    st.caption(PROTOTYPE_DISCLAIMER)
-    examples = example_requests()
-    describe_tab, builder_tab = st.tabs(["Describe your research", "Build your research cohort"])
-    with describe_tab:
-        st.write("Describe the research question you want answered.")
-        applicant_col1, applicant_col2, applicant_col3 = st.columns(3)
-        name = applicant_col1.text_input("Applicant name", key="nl_applicant_name")
-        organisation = applicant_col2.text_input(
-            "Organisation", key="nl_applicant_organisation"
-        )
-        country = applicant_col3.text_input("Country", "AT", key="nl_applicant_country")
-        purpose = st.text_area(
-            "Purpose *",
-            help="Checked against EHDS Art. 53/54",
-            key="nl_purpose",
-        )
-        request_type = st.selectbox(
-            "Type of request",
-            list(REQUEST_TYPES),
-            key="nl_request_type",
-        )
-        requested_as = REQUEST_TYPES[request_type]
-        record_types = []
-        if requested_as == "health data access application":
-            record_types = st.multiselect(
-                "Records to access in the SPE",
-                ["conditions", "medications", "observations", "encounters"],
-                help="The purpose must explain why anonymised statistics are not enough.",
-                key="nl_record_types",
-            )
-        question = st.text_area(
-            "Research question",
-            placeholder=(
-                "Compare HbA1c levels between male and female patients with "
-                "type 2 diabetes aged 40-65 during 2025."
-            ),
-            key="nl_question",
-        )
-        if st.button("Interpret my question", key="nl_interpret"):
-            st.session_state["nl_interpretation"] = interpret_question(question)
-            st.session_state["nl_interpreted_text"] = question
+EXAMPLE_QUESTIONS = [
+    ("Explore diabetes prevalence", "How many adults have type 2 diabetes, by region?"),
+    ("Compare HbA1c between age groups",
+     "Compare HbA1c levels between age groups in patients with type 2 diabetes during 2025."),
+    ("Investigate heart failure hospitalisations",
+     "How many patients were hospitalised for heart failure in 2025, by hospital?"),
+    ("Explore medication use", "How many adults with atrial fibrillation take an oral anticoagulant, by sex?"),
+]
+DECISION_EXPLANATIONS = {
+    "REJECT": "Your request cannot be approved. EHDS Article 54 prohibits this purpose, so no data is released.",
+    "APPROVE_STATISTICAL": "Your request is approved for anonymised statistics. Only aggregated, privacy-checked "
+                           "numbers are released; groups with fewer than 10 patients are hidden.",
+    "APPROVE_SPE": "Your request is approved for a secure processing environment: a locked workspace where approved "
+                   "researchers analyse pseudonymised records on site. Nothing can be downloaded; only aggregated "
+                   "results leave after review.",
+}
+STYLE = """
+<style>
+.block-container {max-width: 1040px; padding-top: 2.2rem;}
+.hero {text-align: center; margin: 1.5rem 0 1rem 0;}
+.hero h1 {font-size: 2.5rem; font-weight: 700; color: #2B2D33; margin-bottom: .4rem;}
+.hero p {color: #6B6F76; font-size: 1.08rem; margin: 0 auto 1rem auto; max-width: 640px;}
+div[data-testid="stTextArea"] textarea {border-radius: 16px; font-size: 1.08rem; padding: 1rem;}
+div.stButton > button {border-radius: 12px; padding: .5rem 1.1rem;}
+.card {background: #FFFFFF; border: 1px solid #ECEBF5; border-radius: 16px; padding: 1.2rem 1.5rem;
+       box-shadow: 0 2px 12px rgba(60, 60, 90, .06); margin-bottom: 1rem;}
+.card h3 {margin: 0 0 .7rem 0; font-size: 1.15rem; color: #2B2D33;}
+.card .row {display: flex; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid #F1F0F7;}
+.card .row:last-child {border-bottom: none;}
+.card .k {min-width: 150px; color: #6B6F76; font-size: .92rem; padding-top: .1rem;}
+.card .v {color: #2B2D33; font-weight: 600;}
+.card .d {display: block; color: #8A8E96; font-size: .82rem; font-weight: 400; margin-top: .1rem;}
+.steps {color: #8A8E96; margin: .2rem 0 1rem 0; font-size: .95rem;}
+.steps b {color: #5B5FC7;}
+.quiet {color: #8A8E96; font-size: .85rem;}
+</style>
+"""
 
-        interpretation = st.session_state.get("nl_interpretation")
-        if interpretation is not None:
-            criteria = interpretation.criteria
-            criteria["record_types"] = record_types
-            st.subheader("Interpretation")
-            description = describe_criteria(criteria)
-            metric_labels = [
-                metric.get("label")
-                for metric in criteria.get("metrics", [])
-                if metric.get("label")
-            ]
-            if metric_labels:
-                description += " Outputs: " + ", ".join(metric_labels) + "."
-            st.info(description)
-            code_rows = _builder_code_rows(
-                criteria.get("population", {}).get("items", [])
-            )
-            if code_rows:
-                st.table(pd.DataFrame(code_rows))
 
-            group_labels = {
-                "sex": "Sex",
-                "age_band": "Age band",
-                "region": "Region",
-                "data_holder": "Hospital",
-            }
-            groups = [
-                group_labels.get(item.get("dimension"), item.get("dimension"))
-                for item in criteria.get("group_by", [])
-            ]
-            outputs = [
-                item.get("label", item.get("type", "Output"))
-                for item in criteria.get("metrics", [])
-            ]
-            st.markdown(f"**Time period:** {_criteria_period_summary(criteria)}")
-            st.markdown(
-                f"**Grouping:** {', '.join(groups) if groups else 'No grouping'}"
-            )
-            st.markdown(f"**Outputs:** {', '.join(outputs)}")
-            st.markdown("**Assumptions and documented defaults**")
-            if interpretation.assumptions:
-                for assumption in interpretation.assumptions:
-                    st.markdown(f"- {assumption}")
+def _go(stage):
+    st.session_state["stage"] = stage
+    st.session_state["flow_rerun"] = True
+
+
+def _draft():
+    return st.session_state.setdefault("draft", {})
+
+
+def _escape(text):
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _card(title, rows):
+    body = "".join(
+        f'<div class="row"><div class="k">{_escape(k)}</div><div class="v">{_escape(v)}'
+        + (f'<span class="d">{_escape(d)}</span>' if d else "") + "</div></div>"
+        for k, v, d in rows
+    )
+    st.markdown(f'<div class="card"><h3>{_escape(title)}</h3>{body}</div>', unsafe_allow_html=True)
+
+
+def _period_phrase(start, end):
+    if start and end and start[:4] == end[:4] and start.endswith("-01-01") and end.endswith("-12-31"):
+        return start[:4]
+    if start and end:
+        return f"{start} to {end}"
+    if start:
+        return f"since {start}"
+    if end:
+        return f"up to {end}"
+    return ""
+
+
+def _interpretation_rows(criteria):
+    """Plain-language rows for the understanding/review cards: (label, value, detail)."""
+    rows = []
+    population = criteria.get("population", {}) if isinstance(criteria, dict) else {}
+    leaves, nested = _criterion_leaves(population.get("items", []) if isinstance(population, dict) else [])
+    if str(population.get("match", "all")).casefold() == "any" and len(leaves) > 1:
+        rows.append(("Combination", "Patients meeting at least one of the criteria", "OR"))
+    for item in leaves:
+        kind = item.get("type")
+        excluded = bool(item.get("exclude"))
+        prefix = "Excluding " if excluded else ""
+        label = str(item.get("label") or kind)
+        if kind == "condition":
+            when = _period_phrase(item.get("onset_start"), item.get("onset_end"))
+            if item.get("onset_start") and item.get("onset_end"):
+                when = f"newly diagnosed in {when}"
+            elif item.get("onset_start"):
+                when = f"diagnosed {when}"
+            elif item.get("onset_end"):
+                when = f"diagnosed {when}"
+            value = f"{prefix}people with {label}" + (f", {when}" if when else "")
+            rows.append(("Population", value, f"Identified using ICD-10 {', '.join(item.get('icd10', []))} codes"))
+        elif kind == "hospital_stay":
+            when = _period_phrase(item.get("period_start"), item.get("period_end"))
+            codes = item.get("icd10") or []
+            value = f"{prefix}hospital stays" + (f" for {label}" if codes else "") + (f" in {when}" if when else "")
+            detail = (f"Inpatient stays with main diagnosis ICD-10 {', '.join(codes)}; emergency visits not counted"
+                      if codes else "Inpatient stays of any main diagnosis")
+            rows.append(("Hospital stays", value, detail))
+        elif kind == "medication":
+            status = {"ever": "ever prescribed", "during_period": "prescribed during the period"}.get(
+                item.get("status"), "active prescription on 31 Dec 2025")
+            value = f"{prefix}taking {label}" if not excluded else f"Not taking {label}"
+            rows.append(("Medication", f"{value} ({status})", f"ATC codes {', '.join(item.get('atc', []))}"))
+        elif kind == "lab":
+            op = {">": "above", ">=": "at least", "<": "below", "<=": "at most"}.get(item.get("op"))
+            when = _period_phrase(item.get("period_start"), item.get("period_end"))
+            if op:
+                value = f"{prefix}latest {label} {op} {item.get('value')} {item.get('unit') or ''}".strip()
             else:
-                st.write("No additional assumptions or defaults applied.")
-            if interpretation.unrecognised:
-                st.warning(
-                    "Not recognised (not used): "
-                    + ", ".join(interpretation.unrecognised)
-                )
-            if not interpretation.ok():
-                st.error(
-                    "Nothing clinical or demographic was recognised. Please "
-                    "refine the question or use the cohort builder."
-                )
-            if st.session_state.get("nl_interpreted_text") != question:
-                st.caption("Edit the question and interpret it again before submitting.")
+                value = f"{prefix}with a {label} measurement"
+            rows.append(("Measurement", value + (f" ({when})" if when else ""),
+                         f"LOINC {item.get('loinc')}; latest value per patient"))
+        elif kind == "age":
+            low, high = item.get("min"), item.get("max")
+            value = f"{low}–{high} years" if low is not None and high is not None else (
+                f"{low} years or older" if low is not None else f"{high} years or younger")
+            rows.append(("Age", prefix + value, "Age on 31 December 2025"))
+        elif kind == "sex":
+            rows.append(("Sex", prefix + str(item.get("value")).capitalize(), ""))
+        elif kind == "region":
+            rows.append(("Region", prefix + ", ".join(item.get("values", [])), ""))
+        elif kind == "data_holder":
+            rows.append(("Hospital", prefix + ", ".join(item.get("values", [])), "Patients registered at this data holder"))
+    if nested:
+        rows.append(("Combination", "Contains nested criteria groups", "Edit details is not available for nested groups"))
+    group_by = criteria.get("group_by", []) if isinstance(criteria, dict) else []
+    if group_by:
+        names = [DIM_LABELS.get(g.get("dimension"), g.get("dimension")) for g in group_by]
+        detail = ""
+        for g in group_by:
+            if g.get("dimension") == "age_band":
+                detail = "Age bands: " + ", ".join(b["label"] for b in g.get("bands", []))
+        rows.append(("Compare by", " and ".join(names), detail))
+    period = _criteria_period_summary(criteria) if isinstance(criteria, dict) else ""
+    if period and period != "No time period applied.":
+        rows.append(("Period", period, ""))
+    metrics = criteria.get("metrics", []) if isinstance(criteria, dict) else []
+    means = [m for m in metrics if m.get("type") == "mean_latest_lab"]
+    if means:
+        analysis = "Statistical comparison: " + ", ".join(m.get("label", "mean") for m in means)
+        if not group_by:
+            analysis = "Mean values: " + ", ".join(m.get("label", "mean") for m in means)
+    else:
+        analysis = "Patient counts" + (" per group" if group_by else "")
+    rows.append(("Analysis", analysis, "Counts below 10 are hidden; averages need at least 10 patients"))
+    record_types = criteria.get("record_types", []) if isinstance(criteria, dict) else []
+    if record_types:
+        rows.append(("Records requested", ", ".join(record_types), "Only inside a secure processing environment"))
+    return rows
 
-            submit_col, correct_col = st.columns(2)
-            if submit_col.button(
-                "Confirm and submit",
-                key="nl_submit",
-                type="primary",
-                disabled=(
-                    not interpretation.ok()
-                    or not purpose.strip()
-                    or st.session_state.get("nl_interpreted_text") != question
-                ),
-            ):
-                request_number = st.session_state.get("nl_request_number", 0) + 1
-                request = {
-                    "id": f"NL-{request_number}",
-                    "applicant": {
-                        "name": name,
-                        "organisation": organisation,
-                        "country": country,
-                    },
-                    "requested_as": requested_as,
-                    "requested_format": (
-                        "anonymised statistics"
-                        if requested_as == "health data request"
-                        else "pseudonymised records"
-                    ),
-                    "purpose": purpose,
-                    "question": st.session_state.get("nl_interpreted_text", question),
-                    "definitions": criteria_to_definitions(criteria),
-                    "criteria": criteria,
-                }
-                with st.spinner("Assessing request..."):
-                    resp = process_request(request)
-                store(resp, request)
-                st.session_state["last"] = resp["request_id"]
-                st.session_state["nl_request_number"] = request_number
-            if correct_col.button("Correct in cohort builder", key="nl_correct"):
-                nested = _prefill_builder(
-                    criteria,
-                    {
-                        "name": name,
-                        "organisation": organisation,
-                        "country": country,
-                    },
-                    purpose,
-                    request_type,
-                )
-                st.success("Loaded into the cohort builder tab — open it to edit.")
-                if nested:
-                    st.caption(
-                        "Nested groups cannot be edited in the cohort builder yet; "
-                        "use Confirm and submit to preserve the interpretation."
-                    )
 
-    with builder_tab:
-        data = warm_data()
-        st.write("Choose a population, add optional criteria, and preview the request before submission.")
-        applicant_col1, applicant_col2, applicant_col3 = st.columns(3)
-        builder_name = applicant_col1.text_input("Applicant name", key="builder_applicant_name")
-        builder_org = applicant_col2.text_input("Organisation", key="builder_applicant_org")
-        builder_country = applicant_col3.text_input(
-            "Country",
-            "AT",
-            key="builder_applicant_country",
-        )
-        builder_purpose = st.text_area(
-            "Purpose *",
-            help="Checked against EHDS Art. 53/54",
-            key="builder_purpose",
-        )
-        builder_type = st.selectbox(
-            "Type of request",
-            list(REQUEST_TYPES),
-            key="builder_request_type",
-        )
-        builder_requested_as = REQUEST_TYPES[builder_type]
-        record_types = []
-        if builder_requested_as == "health data access application":
-            record_types = st.multiselect(
-                "Records to access in the SPE",
-                ["conditions", "medications", "observations", "encounters"],
-                help="The purpose must explain why anonymised statistics are not enough.",
-                key="builder_record_types",
-            )
+def _pending_clarifications(draft):
+    criteria = draft.get("criteria") or {}
+    leaves, _ = _criterion_leaves(criteria.get("population", {}).get("items", []))
+    answered = draft.setdefault("clarified", {})
+    return [
+        item for item in leaves
+        if item.get("type") == "medication"
+        and any(f"'{item.get('label')}'" in a for a in draft.get("assumptions", []))
+        and item.get("label") not in answered
+    ]
 
-        year_columns = (
-            ("conditions", "onset_date"),
-            ("observations", "date"),
-            ("medications", "start_date"),
-            ("encounters", "start_date"),
-        )
-        years_by_table = {}
-        years = set()
-        for table, column in year_columns:
-            table_years = {
-                int(value)
-                for value in data[table][column].dropna().dt.year.unique()
-                if int(value) <= 2025
-            }
-            years_by_table[table] = table_years
-            years.update(table_years)
-        year_options = [None, *sorted(years)]
-        record_year_sets = [
-            years_by_table[table]
-            for table in ("observations", "medications", "encounters")
-        ]
-        if all(record_year_sets):
-            shared_years = set.intersection(*record_year_sets)
-            if shared_years:
-                coverage = f"{min(shared_years)}–{max(shared_years)}"
-            else:
-                coverage = "not shared across all three record types"
+
+def _screen_welcome(examples):
+    st.markdown('<div class="hero"><h1>What would you like to research?</h1>'
+                "<p>Describe your research question in your own words. We'll help you turn it into a "
+                "structured research request.</p></div>", unsafe_allow_html=True)
+    if "pending_question" in st.session_state:
+        st.session_state["research_question"] = st.session_state.pop("pending_question")
+    question = st.text_area("Your research question", key="research_question", height=140,
+                            placeholder="Show HbA1c trends in patients with type 2 diabetes.",
+                            label_visibility="collapsed")
+    left, _ = st.columns([1, 3])
+    if left.button("Continue", type="primary", key="welcome_continue", width="stretch"):
+        if not question.strip():
+            st.warning("Please describe what you would like to research, or pick an example below.")
         else:
-            coverage = "not available"
-        year_col1, year_col2 = st.columns(2)
-        from_year = year_col1.selectbox(
-            "From year",
-            year_options,
-            format_func=lambda value: "No start year" if value is None else str(value),
-            key="builder_from_year",
-        )
-        to_year = year_col2.selectbox(
-            "To year",
-            year_options,
-            format_func=lambda value: "No end year" if value is None else str(value),
-            key="builder_to_year",
-        )
-        st.caption(f"Lab, medication and hospital-stay records cover {coverage}")
-        period_start, period_end = _year_bounds(from_year, to_year)
-        invalid_period = from_year is not None and to_year is not None and from_year > to_year
-        if invalid_period:
-            st.error("The start year must not be after the end year.")
+            interpretation = interpret_question(question)
+            st.session_state["draft"] = {
+                "question": question, "criteria": interpretation.criteria,
+                "assumptions": list(interpretation.assumptions),
+                "unrecognised": list(interpretation.unrecognised),
+                "ok": interpretation.ok(), "source": "question", "clarified": {},
+            }
+            _go("understand")
+    st.caption("Try an example:")
+    for col, (label, text) in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
+        if col.button(label, key=f"example_{_slug_key(label)}", width="stretch"):
+            st.session_state["pending_question"] = text
+            _go("welcome")
+    st.markdown("")
+    st.markdown("**Prefer step-by-step guidance?**")
+    if st.button("Build your request with me", key="start_guided"):
+        st.session_state["guided_step"] = 1
+        _go("guided")
+    st.markdown("")
+    with st.expander("Advanced options", expanded=False):
+        st.caption("For technical users: submit requests in the challenge JSON format.")
+        _advanced_options(examples)
+    st.markdown(f'<p class="quiet">{PROTOTYPE_DISCLAIMER} Synthetic data only.</p>', unsafe_allow_html=True)
 
-        st.radio(
-            "Patients must meet:",
-            ["ALL of the criteria", "ANY of the criteria"],
-            horizontal=True,
-            key="builder_match",
-        )
-        categories = [
-            "Diagnosis",
-            "Medication",
-            "Laboratory measurement",
-            "Age",
-            "Sex",
-            "Region",
-            "Hospital (data holder)",
-            "Hospital stay (main diagnosis)",
-        ]
-        category = st.selectbox("Criterion type", categories, key="builder_new_category")
-        if st.button("Add criterion", key="builder_add_criterion"):
-            row_id = st.session_state.get("builder_next_criterion_id", 0) + 1
-            st.session_state["builder_next_criterion_id"] = row_id
-            st.session_state.setdefault("builder_criteria", []).append({
-                "id": row_id,
-                "category": category,
-            })
 
-        st.session_state.setdefault("builder_criteria", [])
-        criterion_items = []
-        for row in list(st.session_state["builder_criteria"]):
-            with st.container(border=True):
-                criterion = _builder_criterion_row(row, data, period_start, period_end)
-            if criterion is not None:
-                criterion_items.append(criterion)
-        match = "any" if st.session_state.get("builder_match") == "ANY of the criteria" else "all"
+def _slug_key(text):
+    return re.sub(r"[^a-z0-9]+", "_", text.casefold()).strip("_")
 
-        group_by_choices = {
-            "Sex": "sex",
-            "Age band": "age_band",
-            "Region": "region",
-            "Hospital": "data_holder",
-        }
-        selected_groups = st.multiselect(
-            "Group results by",
-            list(group_by_choices),
-            key="builder_group_by",
-        )
-        group_by = []
-        for label in selected_groups:
-            dimension = group_by_choices[label]
+
+def _screen_understand():
+    draft = _draft()
+    criteria = draft.get("criteria") or {}
+    st.markdown("### Here's how I understood your research question")
+    st.caption(f"\u201c{draft.get('question', '')}\u201d")
+    rows = _interpretation_rows(criteria) if draft.get("ok") else []
+    if rows:
+        _card("Your research request", rows)
+    if draft.get("assumptions"):
+        st.markdown("**I assumed:**")
+        for a in draft["assumptions"]:
+            st.markdown(f"- {a}")
+    if draft.get("unrecognised"):
+        st.warning("I could not match these words to the available data: "
+                   + ", ".join(f"\u201c{w}\u201d" for w in draft["unrecognised"])
+                   + ". They were not used. The data covers 15 diagnoses, 17 medication groups and 4 laboratory "
+                     "tests; use *Edit details* to choose from them.")
+    if not draft.get("ok"):
+        st.error("I could not find a condition, medication, measurement or patient group in your question that the "
+                 "data supports. Rephrase it or build the request step by step.")
+    st.caption("Interpretation is rule-based (no AI model) and uses the clinical definitions documented for this "
+               "prototype. Patient data never leaves this computer.")
+    c1, c2, c3 = st.columns([1.3, 1, 1])
+    if draft.get("ok") and c1.button("Looks good — Continue", type="primary", key="understand_continue",
+                                     width="stretch"):
+        _go("clarify" if _pending_clarifications(draft) else "review")
+    if c2.button("Edit details", key="understand_edit", width="stretch"):
+        _prefill_builder(criteria, {}, "", list(REQUEST_TYPES)[0])
+        st.session_state["guided_step"] = 2
+        draft["source"] = "guided"
+        _go("guided")
+    if c3.button("Back", key="understand_back", width="stretch"):
+        _go("welcome")
+
+
+def _screen_clarify():
+    draft = _draft()
+    pending = _pending_clarifications(draft)
+    st.markdown("### One quick question")
+    if not pending:
+        _go("review")
+        return
+    choices = {}
+    for item in pending:
+        label = item.get("label")
+        st.markdown(f"When you say **taking {label}**, which patients do you mean?")
+        choices[label] = st.radio(
+            label, ["Active prescription on 31 December 2025 (currently treated)",
+                    "Ever prescribed (any prescription in the records, 2023–2025)"],
+            key=f"clarify_{_slug_key(str(label))}", label_visibility="collapsed")
+        st.caption("Active prescriptions follow the challenge's reference date. 'Ever prescribed' also counts "
+                   "treatments that have stopped.")
+    c1, c2 = st.columns([1, 1])
+    if c1.button("Continue", type="primary", key="clarify_continue", width="stretch"):
+        leaves, _ = _criterion_leaves(draft["criteria"]["population"]["items"])
+        for item in leaves:
+            if item.get("type") == "medication" and item.get("label") in choices:
+                status = "ever" if choices[item["label"]].startswith("Ever") else "active"
+                item["status"] = status
+                draft["clarified"][item["label"]] = status
+        draft["assumptions"] = [a for a in draft["assumptions"] if not a.startswith("Medication status for")]
+        _go("review")
+    if c2.button("Back", key="clarify_back", width="stretch"):
+        _go("understand")
+
+
+def _screen_review():
+    draft = _draft()
+    criteria = draft.get("criteria") or {}
+    st.markdown("### Your research request is ready for review")
+    if draft.get("question"):
+        st.caption(f"\u201c{draft['question']}\u201d")
+    _card("Summary", _interpretation_rows(criteria))
+    st.info(describe_criteria(criteria))
+    if draft.get("assumptions"):
+        st.markdown("**Assumptions applied:**")
+        for a in draft["assumptions"]:
+            st.markdown(f"- {a}")
+    st.markdown("#### Who is submitting this request?")
+    st.caption("These details are required by the EHDS process and help determine the data-access pathway. "
+               "The purpose is checked against the permitted (Art. 53) and prohibited (Art. 54) uses.")
+    c1, c2, c3 = st.columns(3)
+    name = c1.text_input("Your name", key="review_name")
+    org = c2.text_input("Organisation", key="review_org")
+    country = c3.text_input("Country", "AT", key="review_country")
+    purpose = st.text_area("Research purpose", key="review_purpose",
+                           placeholder="e.g. Public-health research on diabetes care quality to plan prevention programmes.")
+    request_type = st.selectbox("What do you need?", list(REQUEST_TYPES), key="review_request_type")
+    requested_as = REQUEST_TYPES[request_type]
+    record_types = []
+    if requested_as == "health data access application":
+        record_types = st.multiselect("Records to analyse in the secure processing environment",
+                                      ["conditions", "medications", "observations", "encounters"],
+                                      key="review_record_types")
+        st.caption("Explain in the purpose why anonymised statistics are not enough (e.g. training a prediction "
+                   "model on individual histories). Otherwise the request is downgraded to statistics.")
+    criteria = dict(criteria)
+    criteria["record_types"] = record_types
+    b1, b2, b3 = st.columns([1.4, 1, 1])
+    if b1.button("Submit research request", type="primary", key="review_submit", width="stretch"):
+        missing = [label for label, value in (("your name", name), ("organisation", org), ("research purpose", purpose))
+                   if not str(value).strip()]
+        if missing:
+            st.error("Please add " + ", ".join(missing) + " before submitting.")
+        else:
+            number = st.session_state.get("flow_request_number", 0) + 1
+            st.session_state["flow_request_number"] = number
+            prefix = "GUIDED" if draft.get("source") == "guided" else "NL"
+            request = {
+                "id": f"{prefix}-{number}",
+                "applicant": {"name": name, "organisation": org, "country": country},
+                "requested_as": requested_as,
+                "requested_format": "anonymised statistics" if requested_as == "health data request"
+                else "pseudonymised records",
+                "purpose": purpose,
+                "question": draft.get("question") or describe_criteria(criteria),
+                "definitions": criteria_to_definitions(criteria),
+                "criteria": criteria,
+            }
+            with st.spinner("Assessing your request..."):
+                resp = process_request(request)
+            store(resp, request)
+            st.session_state["last"] = resp["request_id"]
+            _go("result")
+    if b2.button("Edit details", key="review_edit", width="stretch"):
+        _prefill_builder(criteria, {"name": name, "organisation": org, "country": country}, purpose, request_type)
+        st.session_state["guided_step"] = 2
+        draft["source"] = "guided"
+        _go("guided")
+    if b3.button("Back", key="review_back", width="stretch"):
+        _go("guided" if draft.get("source") == "guided" else "understand")
+    with st.expander("Technical details (request JSON)", expanded=False):
+        st.json({"question": draft.get("question"), "criteria": criteria})
+
+
+def _screen_result():
+    resp = st.session_state.get("decisions", {}).get(st.session_state.get("last"))
+    if not resp:
+        _go("welcome")
+        return
+    approved = resp["decision"] != "REJECT"
+    st.markdown("### Your research results" if approved else "### Decision on your request")
+    st.write(DECISION_EXPLANATIONS.get(resp["decision"], ""))
+    if resp.get("decision") == "APPROVE_STATISTICAL" and resp.get("answer") and not resp.get("withheld"):
+        plan = resp.get("query_plan") or {}
+        if not plan.get("group_by"):
+            value = next(iter(next(iter(resp["answer"].values()), {}).values()), None)
+            if value is not None:
+                st.metric("Eligible patients", str(value))
+    show_response(resp)
+    request = st.session_state.get("requests", {}).get(resp["request_id"]) or {}
+    if isinstance(request.get("criteria"), dict):
+        with st.expander("How this was defined", expanded=False):
+            _card("Definitions used", _interpretation_rows(request["criteria"]))
+    if st.button("Ask another question", key="result_new"):
+        st.session_state["draft"] = {}
+        st.session_state["pending_question"] = ""
+        _go("welcome")
+
+
+GUIDED_STEPS = ["Research question", "Population", "Analysis", "Review"]
+GUIDED_GOALS = ["Explore a medical condition", "Compare patient groups", "Study laboratory measurements",
+                "Investigate medication use", "Explore hospitalisations", "Something else"]
+
+
+def _progress(step):
+    parts = [f"<b>{i}. {name}</b>" if i == step else f"{i}. {name}" for i, name in enumerate(GUIDED_STEPS, 1)]
+    st.markdown('<div class="steps">' + " &rarr; ".join(parts) + "</div>", unsafe_allow_html=True)
+
+
+def _population_step(data):
+    """Criteria rows, time period and ALL/ANY. Returns (items, match, period_start, period_end, invalid)."""
+    years = set()
+    for table, column in (("conditions", "onset_date"), ("observations", "date"),
+                          ("medications", "start_date"), ("encounters", "start_date")):
+        years.update(int(v) for v in data[table][column].dropna().dt.year.unique() if int(v) <= 2025)
+    year_options = [None, *sorted(years)]
+    st.markdown("**Time period** (optional)")
+    y1, y2 = st.columns(2)
+    from_year = y1.selectbox("From year", year_options, key="builder_from_year",
+                             format_func=lambda v: "No start year" if v is None else str(v))
+    to_year = y2.selectbox("To year", year_options, key="builder_to_year",
+                           format_func=lambda v: "No end year" if v is None else str(v))
+    st.caption("Lab, medication and hospital-stay records cover 2023–2025; diagnoses go back further.")
+    period_start, period_end = _year_bounds(from_year, to_year)
+    invalid_period = from_year is not None and to_year is not None and from_year > to_year
+    if invalid_period:
+        st.error("The start year must not be after the end year.")
+    st.markdown("**Patients must meet:**")
+    st.radio("Patients must meet", ["ALL of the criteria", "ANY of the criteria"], horizontal=True,
+             key="builder_match", label_visibility="collapsed",
+             help="ALL = every criterion applies (AND). ANY = at least one applies (OR). "
+                  "Use 'Exclude' on a criterion for NOT.")
+    categories = ["Diagnosis", "Medication", "Laboratory measurement", "Age", "Sex", "Region",
+                  "Hospital (data holder)", "Hospital stay (main diagnosis)"]
+    a1, a2 = st.columns([2, 1])
+    category = a1.selectbox("Add a criterion", categories, key="builder_new_category")
+    if a2.button("Add criterion", key="builder_add_criterion", width="stretch"):
+        row_id = st.session_state.get("builder_next_criterion_id", 0) + 1
+        st.session_state["builder_next_criterion_id"] = row_id
+        st.session_state.setdefault("builder_criteria", []).append({"id": row_id, "category": category})
+    st.session_state.setdefault("builder_criteria", [])
+    items = []
+    for row in list(st.session_state["builder_criteria"]):
+        with st.container(border=True):
+            criterion = _builder_criterion_row(row, data, period_start, period_end)
+        if criterion is not None:
+            items.append(criterion)
+    if not st.session_state["builder_criteria"]:
+        st.caption("No criteria yet. Add at least one, e.g. a diagnosis.")
+    match = "any" if st.session_state.get("builder_match") == "ANY of the criteria" else "all"
+    return items, match, period_start, period_end, invalid_period
+
+
+def _analysis_step(data, period_start, period_end):
+    """Returns (group_by, metrics)."""
+    st.markdown("**What would you like to find out?**")
+    analysis = st.radio("Analysis", ["Count patients", "Compare groups", "Calculate a mean", "Explore changes over time"],
+                        key="guided_analysis", label_visibility="collapsed")
+    explanations = {
+        "Count patients": "How many patients meet your criteria.",
+        "Compare groups": "See how results differ between men and women, age bands, regions or hospitals.",
+        "Calculate a mean": "The average of each patient's latest laboratory value (within the period if set).",
+        "Explore changes over time": "Not available yet in this prototype: results cannot be grouped by year or month. "
+                                     "You can compare groups instead.",
+    }
+    st.caption(explanations[analysis])
+    group_by = []
+    if analysis in ("Compare groups", "Calculate a mean"):
+        choices = {"Sex": "sex", "Age band": "age_band", "Region": "region", "Hospital": "data_holder"}
+        selected = st.multiselect("Compare by", list(choices), key="builder_group_by")
+        for label in selected:
+            dimension = choices[label]
             if dimension == "age_band":
-                preset = st.selectbox(
-                    "Age band preset",
-                    ["10-year bands", "18–39 / 40–64 / 65+", "Custom"],
-                    key="builder_age_band_preset",
-                )
-                custom_bands = ""
-                if preset == "Custom":
-                    custom_bands = st.text_input(
-                        "Custom age bands",
-                        "40-49, 50-59, 60+",
-                        key="builder_custom_age_bands",
-                    )
-                bands = _age_bands(preset, custom_bands)
+                preset = st.selectbox("Age bands", ["10-year bands", "18–39 / 40–64 / 65+", "Custom"],
+                                      key="builder_age_band_preset")
+                custom = st.text_input("Custom age bands", "40-49, 50-59, 60+",
+                                       key="builder_custom_age_bands") if preset == "Custom" else ""
+                bands = _age_bands(preset, custom)
                 if bands:
                     group_by.append({"dimension": "age_band", "bands": bands})
                 else:
                     st.warning("Enter valid age bands such as 40-49, 50-59, 60+.")
             else:
                 group_by.append({"dimension": dimension})
+    metrics = [{"type": "count_patients", "label": "patients"}]
+    want_mean = analysis == "Calculate a mean" or (
+        analysis == "Compare groups" and st.checkbox("Also compare a laboratory value", key="builder_mean_enabled"))
+    if want_mean:
+        lab_options = _builder_concepts(data, "observation")
+        selected_lab = st.selectbox("Laboratory value", [o["label"] for o in lab_options], key="builder_mean_lab")
+        lab = next(o for o in lab_options if o["label"] == selected_lab)
+        metric = {"type": "mean_latest_lab", "label": f"mean latest {lab['term']} ({lab['unit']})",
+                  "loinc": lab["codes"][0]}
+        if period_start:
+            metric["period_start"] = period_start
+        if period_end:
+            metric["period_end"] = period_end
+        metrics.append(metric)
+    return group_by, metrics
 
-        metrics = [{"type": "count_patients", "label": "patients"}]
-        if st.checkbox("Mean of latest lab value", key="builder_mean_enabled"):
-            lab_options = _builder_concepts(data, "observation")
-            if lab_options:
-                selected_mean_lab = st.selectbox(
-                    "Laboratory value to average",
-                    [option["label"] for option in lab_options],
-                    key="builder_mean_lab",
-                )
-                mean_lab = next(
-                    option for option in lab_options if option["label"] == selected_mean_lab
-                )
-                metric_label = f"mean latest {mean_lab['term']} ({mean_lab['unit']})"
-                mean_metric = {
-                    "type": "mean_latest_lab",
-                    "label": metric_label,
-                    "loinc": mean_lab["codes"][0],
-                }
-                if period_start:
-                    mean_metric["period_start"] = period_start
-                if period_end:
-                    mean_metric["period_end"] = period_end
-                metrics.append(mean_metric)
-            else:
-                st.caption("No dictionary laboratory measurements are available.")
 
-        criteria = {
-            "population": {"match": match, "items": criterion_items},
-            "group_by": group_by,
-            "metrics": metrics,
-            "record_types": record_types,
-        }
-        request_number = st.session_state.get("builder_request_number", 0) + 1
-        requested_format = (
-            "anonymised statistics"
-            if builder_requested_as == "health data request"
-            else "pseudonymised records"
-        )
-        builder_request = {
-            "id": f"BUILDER-{request_number}",
-            "applicant": {
-                "name": builder_name,
-                "organisation": builder_org,
-                "country": builder_country,
-            },
-            "requested_as": builder_requested_as,
-            "requested_format": requested_format,
-            "purpose": builder_purpose,
-            "question": describe_criteria(criteria),
-            "definitions": criteria_to_definitions(criteria),
-            "criteria": criteria,
-        }
-        st.info(describe_criteria(criteria))
-        code_rows = _builder_code_rows(criterion_items)
-        if code_rows:
-            st.table(pd.DataFrame(code_rows))
-        with st.expander("Request JSON"):
-            st.json(builder_request)
-        if st.button(
-            "Submit request",
-            key="builder_submit",
-            type="primary",
-            disabled=not builder_purpose.strip() or not criterion_items or invalid_period,
-        ):
-            with st.spinner("Assessing request..."):
-                resp = process_request(builder_request)
-            store(resp, builder_request)
-            st.session_state["last"] = resp["request_id"]
-            st.session_state["builder_request_number"] = request_number
+def _screen_guided():
+    data = warm_data()
+    draft = _draft()
+    step = st.session_state.get("guided_step", 1)
+    st.markdown("### Build your request step by step")
+    _progress(step)
+    if step == 1:
+        st.markdown("**What would you like to investigate?**")
+        st.radio("Goal", GUIDED_GOALS, key="guided_goal", label_visibility="collapsed")
+        st.text_area("Tell me more (optional)", key="guided_details",
+                     placeholder="e.g. whether blood-sugar control differs between hospitals")
+        c1, c2 = st.columns([1, 1])
+        if c1.button("Next", type="primary", key="guided_next_1", width="stretch"):
+            st.session_state["guided_step"] = 2
+            _go("guided")
+        if c2.button("Back to start", key="guided_back_1", width="stretch"):
+            _go("welcome")
+    elif step == 2:
+        st.markdown("**Which patients would you like to include?**")
+        items, match, period_start, period_end, invalid = _population_step(data)
+        st.session_state["guided_items"] = items
+        if items:
+            st.info(describe_criteria({"population": {"match": match, "items": items}}))
+        c1, c2 = st.columns([1, 1])
+        if c1.button("Next", type="primary", key="guided_next_2", width="stretch",
+                     disabled=not items or invalid):
+            st.session_state["guided_step"] = 3
+            _go("guided")
+        if c2.button("Back", key="guided_back_2", width="stretch"):
+            st.session_state["guided_step"] = 1
+            _go("guided")
+    elif step == 3:
+        period_start, period_end = _year_bounds(st.session_state.get("builder_from_year"),
+                                                st.session_state.get("builder_to_year"))
+        group_by, metrics = _analysis_step(data, period_start, period_end)
+        c1, c2 = st.columns([1, 1])
+        if c1.button("Next", type="primary", key="guided_next_3", width="stretch"):
+            # Recompute the population from the stored rows without rendering them again.
+            items = st.session_state.get("guided_items", [])
+            match = "any" if st.session_state.get("builder_match") == "ANY of the criteria" else "all"
+            criteria = {"population": {"match": match, "items": items}, "group_by": group_by,
+                        "metrics": metrics, "record_types": []}
+            goal = st.session_state.get("guided_goal", "")
+            details = st.session_state.get("guided_details", "")
+            draft.update({"criteria": criteria, "assumptions": [], "unrecognised": [], "ok": bool(items),
+                          "source": "guided", "clarified": {},
+                          "question": (details.strip() or goal) if (details or goal) else describe_criteria(criteria)})
+            st.session_state["guided_step"] = 4
+            _go("review")
+        if c2.button("Back", key="guided_back_3", width="stretch"):
+            st.session_state["guided_step"] = 2
+            _go("guided")
 
-    with st.expander("Advanced options", expanded=False):
-        source = st.radio(
-            "Request source",
-            [
-                "Example request",
-                "Upload JSON",
-                "Paste JSON",
-                "Fill in a form (challenge format)",
-            ],
-            horizontal=True,
-        )
-        request = None
-        if source == "Example request":
-            rid = st.selectbox("Example", list(examples))
-            request = examples[rid]
-            a = request.get("applicant", {})
-            st.markdown(f"**Applicant:** {a.get('name')}, {a.get('organisation')} ({a.get('country')})  \n"
-                        f"**Requested as:** {request.get('requested_as')}  \n"
-                        f"**Purpose:** {request.get('purpose')}  \n**Question:** {request.get('question')}")
-            with st.expander("Full request JSON"):
-                st.json(request)
-        elif source == "Upload JSON":
-            f = st.file_uploader("Request JSON", type="json")
-            if f:
-                try:
-                    request = json.loads(f.read().decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    st.error(f"Invalid JSON file: {e}")
-        elif source == "Paste JSON":
-            txt = st.text_area("Request JSON", height=300)
-            if txt.strip():
-                try:
-                    request = json.loads(txt)
-                except json.JSONDecodeError as e:
-                    st.error(f"Invalid JSON: {e}")
-        elif source == "Fill in a form (challenge format)":
-            with st.form("advanced_challenge_form"):
-                form_col1, form_col2, form_col3 = st.columns(3)
-                form_name = form_col1.text_input("Applicant name")
-                form_org = form_col2.text_input("Organisation")
-                form_country = form_col3.text_input("Country", "AT")
-                form_request_type = st.selectbox(
-                    "Type of request", list(REQUEST_TYPES)
-                )
-                form_purpose = st.text_area("Purpose")
-                form_question = st.text_area("Question")
-                form_definitions = st.text_area(
-                    "Definitions (one per line)",
-                    height=150,
-                    help="Optional. If omitted, the built-in terminology dictionary is used.",
-                )
-                submit_challenge = st.form_submit_button(
-                    "Submit this request", type="primary"
-                )
-            if submit_challenge:
-                form_requested_as = REQUEST_TYPES[form_request_type]
-                request = {
-                    "id": st.session_state.get("form_id", "NEW-1"),
-                    "applicant": {
-                        "name": form_name,
-                        "organisation": form_org,
-                        "country": form_country,
-                    },
-                    "requested_as": form_requested_as,
-                    "requested_format": (
-                        "anonymised statistics"
-                        if form_requested_as == "health data request"
-                        else "pseudonymised records"
-                    ),
-                    "purpose": form_purpose,
-                    "question": form_question,
-                    "definitions": [
-                        definition.strip()
-                        for definition in form_definitions.splitlines()
-                        if definition.strip()
-                    ],
-                }
-                with st.spinner("Assessing request..."):
-                    resp = process_request(request)
-                store(resp, request)
-                st.session_state["last"] = resp["request_id"]
-        if (
-            source != "Fill in a form (challenge format)"
-            and request
-            and st.button("Submit this request", type="primary")
-        ):
+
+PERSISTED_PREFIXES = ("builder_", "guided_", "review_", "clarify_", "research_question")
+_BUTTON_KEY = re.compile(r"(?:_submit|_edit|_back|_continue|_remove|_add_criterion|_next_\d+|_back_\d+)$")
+
+
+def _keep_widget_state():
+    """Streamlit forgets a keyed widget's value when the widget is not rendered (e.g. on another wizard
+    step). Re-assigning the keys each run keeps Back/Next from losing answers."""
+    for key in list(st.session_state.keys()):
+        if (isinstance(key, str) and key.startswith(PERSISTED_PREFIXES)
+                and not _BUTTON_KEY.search(key)):
+            st.session_state[key] = st.session_state[key]
+
+
+def page_applicant():
+    st.markdown(STYLE, unsafe_allow_html=True)
+    _keep_widget_state()
+    examples = example_requests()
+    stage = st.session_state.get("stage", "welcome")
+    if stage == "welcome":
+        _screen_welcome(examples)
+    elif stage == "understand":
+        _screen_understand()
+    elif stage == "clarify":
+        _screen_clarify()
+    elif stage == "review":
+        _screen_review()
+    elif stage == "result":
+        _screen_result()
+    elif stage == "guided":
+        _screen_guided()
+    if st.session_state.pop("builder_rerun_needed", False) or st.session_state.pop("flow_rerun", False):
+        st.rerun()
+
+
+def _advanced_options(examples):
+    source = st.radio(
+        "Request source",
+        [
+            "Example request",
+            "Upload JSON",
+            "Paste JSON",
+            "Fill in a form (challenge format)",
+        ],
+        horizontal=True,
+    )
+    request = None
+    if source == "Example request":
+        rid = st.selectbox("Example", list(examples))
+        request = examples[rid]
+        a = request.get("applicant", {})
+        st.markdown(f"**Applicant:** {a.get('name')}, {a.get('organisation')} ({a.get('country')})  \n"
+                    f"**Requested as:** {request.get('requested_as')}  \n"
+                    f"**Purpose:** {request.get('purpose')}  \n**Question:** {request.get('question')}")
+        with st.expander("Full request JSON"):
+            st.json(request)
+    elif source == "Upload JSON":
+        f = st.file_uploader("Request JSON", type="json")
+        if f:
+            try:
+                request = json.loads(f.read().decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                st.error(f"Invalid JSON file: {e}")
+    elif source == "Paste JSON":
+        txt = st.text_area("Request JSON", height=300)
+        if txt.strip():
+            try:
+                request = json.loads(txt)
+            except json.JSONDecodeError as e:
+                st.error(f"Invalid JSON: {e}")
+    elif source == "Fill in a form (challenge format)":
+        with st.form("advanced_challenge_form"):
+            form_col1, form_col2, form_col3 = st.columns(3)
+            form_name = form_col1.text_input("Applicant name")
+            form_org = form_col2.text_input("Organisation")
+            form_country = form_col3.text_input("Country", "AT")
+            form_request_type = st.selectbox(
+                "Type of request", list(REQUEST_TYPES)
+            )
+            form_purpose = st.text_area("Purpose")
+            form_question = st.text_area("Question")
+            form_definitions = st.text_area(
+                "Definitions (one per line)",
+                height=150,
+                help="Optional. If omitted, the built-in terminology dictionary is used.",
+            )
+            submit_challenge = st.form_submit_button(
+                "Submit this request", type="primary"
+            )
+        if submit_challenge:
+            form_requested_as = REQUEST_TYPES[form_request_type]
+            request = {
+                "id": st.session_state.get("form_id", "NEW-1"),
+                "applicant": {
+                    "name": form_name,
+                    "organisation": form_org,
+                    "country": form_country,
+                },
+                "requested_as": form_requested_as,
+                "requested_format": (
+                    "anonymised statistics"
+                    if form_requested_as == "health data request"
+                    else "pseudonymised records"
+                ),
+                "purpose": form_purpose,
+                "question": form_question,
+                "definitions": [
+                    definition.strip()
+                    for definition in form_definitions.splitlines()
+                    if definition.strip()
+                ],
+            }
             with st.spinner("Assessing request..."):
                 resp = process_request(request)
             store(resp, request)
             st.session_state["last"] = resp["request_id"]
-    last = st.session_state.get("decisions", {}).get(st.session_state.get("last"))
-    if last:
-        st.subheader(f"Decision for {last['request_id']}")
-        show_response(last)
-    if st.session_state.pop("builder_rerun_needed", False):
-        st.rerun()
+            _go("result")
+    if (
+        source != "Fill in a form (challenge format)"
+        and request
+        and st.button("Submit this request", type="primary")
+    ):
+        with st.spinner("Assessing request..."):
+            resp = process_request(request)
+        store(resp, request)
+        st.session_state["last"] = resp["request_id"]
+        _go("result")
 
 
 def page_staff():
@@ -1285,14 +1468,14 @@ def page_staff():
             "privacy check": "passed" if not (r.get("privacy_check") or {}).get("violations") else "FAILED",
             "time (s)": round(r.get("processing_time_s", 0), 3),
         } for r in decisions.values()])
-        st.dataframe(overview, hide_index=True, use_container_width=True)
+        st.dataframe(overview, hide_index=True, width="stretch")
         rid = st.selectbox("Inspect request", list(decisions))
         show_response(decisions[rid], staff=True)
     st.subheader("Audit log")
     log = Path(config.AUDIT_LOG)
     if log.exists():
         lines = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
-        st.dataframe(pd.DataFrame(lines[::-1]).astype(str), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(lines[::-1]).astype(str), hide_index=True, width="stretch")
     else:
         st.caption("Empty.")
 
@@ -1343,7 +1526,7 @@ def page_evaluation():
 
 
 warm_data()
-PAGES = {"Applicant portal": page_applicant, "Staff dashboard": page_staff,
+PAGES = {"Research assistant": page_applicant, "Staff dashboard": page_staff,
          "Secure processing environment": page_spe, "Evaluation": page_evaluation}
 st.sidebar.title("EHDS Health Data Access Body")
 st.sidebar.caption("Simulated HDAB for AIM Hackathon Vienna 2026, Track 3. Synthetic data only.")

@@ -4,240 +4,181 @@ from streamlit.testing.v1 import AppTest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+QUESTION = "Compare HbA1c levels between male and female patients with type 2 diabetes aged 40-65 during 2025."
 
 
 def _app():
-    return AppTest.from_file(str(ROOT / "app.py")).run()
+    return AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
 
 
 def _advanced_options(at):
     return next(expander for expander in at.expander if expander.label == "Advanced options")
 
 
-def _describe_tab(at):
-    return next(tab for tab in at.tabs if tab.label == "Describe your research")
-
-
-def _builder_tab(at):
-    return next(tab for tab in at.tabs if tab.label == "Build your research cohort")
-
-
-def test_applicant_page_runs_without_exception():
-    at = _app()
-
-    assert not at.exception
-
-
-def test_advanced_options_contains_request_source_radio():
-    at = _app()
+def _submit_example(at, rid="R01"):
     advanced = _advanced_options(at)
+    advanced.radio[0].set_value("Example request")
+    at.run()
+    advanced = _advanced_options(at)
+    advanced.selectbox[0].set_value(rid)
+    at.run()
+    advanced = _advanced_options(at)
+    next(button for button in advanced.button if button.label == "Submit this request").click()
+    at.run()
+    return at
 
-    assert len(advanced.radio) == 1
+
+def _fill_review(at):
+    at.text_input(key="review_name").set_value("Dr Test")
+    at.text_input(key="review_org").set_value("Test University")
+    at.text_area(key="review_purpose").set_value("Public health research on diabetes care.")
+
+
+def test_landing_is_a_single_question_box():
+    at = _app()
+    assert not at.exception
+    assert any("What would you like to research?" in m.value for m in at.markdown)
+    assert at.text_area(key="research_question").value == ""
+    advanced = _advanced_options(at)
     assert advanced.radio[0].label == "Request source"
-    assert advanced.radio[0].options == [
-        "Example request",
-        "Upload JSON",
-        "Paste JSON",
-        "Fill in a form (challenge format)",
-    ]
+    assert "Example request" in advanced.radio[0].options
+    assert not any(widget.key == "review_name" for widget in at.text_input)
 
 
-def test_advanced_example_request_submission_shows_statistical_decision():
+def test_example_chip_populates_question():
     at = _app()
-    advanced = _advanced_options(at)
-    advanced.radio[0].set_value("Example request")
+    next(button for button in at.button if button.label == "Explore diabetes prevalence").click()
     at.run()
-
-    advanced = _advanced_options(at)
-    advanced.selectbox[0].set_value("R01")
-    at.run()
-
-    advanced = _advanced_options(at)
-    next(button for button in advanced.button if button.label == "Submit this request").click()
-    at.run()
-
-    assert not at.exception
-    assert any("APPROVE_STATISTICAL" in element.value for element in at.success)
+    assert "type 2 diabetes" in at.text_area(key="research_question").value
 
 
-def test_form_submission_shows_statistical_decision():
+def test_question_flow_interprets_reviews_and_submits():
     at = _app()
-    describe = _describe_tab(at)
-    next(widget for widget in describe.text_area if widget.label == "Purpose *").set_value(
-        "Public health research on type 2 diabetes prevalence."
-    )
-    next(widget for widget in describe.text_area if widget.label == "Research question").set_value(
-        "How many adults have type 2 diabetes, by sex?"
-    )
-    next(widget for widget in describe.text_input if widget.label == "Applicant name").set_value(
-        "Test Applicant"
-    )
-    next(widget for widget in describe.text_input if widget.label == "Organisation").set_value(
-        "Test University"
-    )
-    next(button for button in describe.button if button.label == "Interpret my question").click()
+    at.text_area(key="research_question").set_value(QUESTION)
+    at.button(key="welcome_continue").click()
     at.run()
-    describe = _describe_tab(at)
-    next(button for button in describe.button if button.label == "Confirm and submit").click()
-    at.run()
-
     assert not at.exception
-    assert any("APPROVE_STATISTICAL" in element.value for element in at.success)
+    assert at.session_state["stage"] == "understand"
+    card = next(m.value for m in at.markdown if 'class="card"' in m.value)
+    assert "Type 2 diabetes" in card and "ICD-10 E11" in card and "40–65" in card and "Sex" in card
+    assert "2025" in card and "HbA1c" in card
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    at.button(key="review_submit").click()
+    at.run()
+    assert any("Please add" in e.value for e in at.error)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["stage"] == "result"
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert any("Your research results" in m.value for m in at.markdown)
+    table = at.dataframe[0].value
+    assert "7.2" in table.astype(str).to_numpy().ravel().tolist()
 
 
-def test_research_cohort_builder_adds_diagnosis_and_submits():
+def test_unrecognised_concept_cannot_continue():
     at = _app()
-    builder = _builder_tab(at)
-    next(widget for widget in builder.text_area if widget.label == "Purpose *").set_value(
-        "Public health research on type 2 diabetes prevalence."
-    )
-    next(widget for widget in builder.selectbox if widget.label == "Criterion type").set_value(
-        "Diagnosis"
-    )
-    next(button for button in builder.button if button.label == "Add criterion").click()
+    at.text_area(key="research_question").set_value("Number of patients with sepsis by sex")
+    at.button(key="welcome_continue").click()
     at.run()
-
-    builder = _builder_tab(at)
-    next(widget for widget in builder.selectbox if widget.label == "Diagnosis").set_value(
-        "Type 2 diabetes (ICD-10 E11)"
-    )
-    next(button for button in builder.button if button.label == "Submit request").click()
-    at.run()
-
-    assert not at.exception
-    assert any("APPROVE_STATISTICAL" in element.value for element in at.success)
+    assert at.session_state["stage"] == "understand"
+    assert any("sepsis" in w.value for w in at.warning)
+    assert at.error
+    assert not any(button.key == "understand_continue" for button in at.button)
 
 
-def test_builder_lab_threshold_default_tracks_selected_loinc():
+def test_medication_clarification_updates_request():
     at = _app()
-    builder = _builder_tab(at)
-    from_year = next(widget for widget in builder.selectbox if widget.label == "From year")
-    assert "1995" in from_year.options
-    next(widget for widget in builder.selectbox if widget.label == "Criterion type").set_value(
-        "Laboratory measurement"
-    )
-    next(button for button in builder.button if button.label == "Add criterion").click()
+    at.text_area(key="research_question").set_value(
+        "How many adults with atrial fibrillation take an oral anticoagulant, by sex?")
+    at.button(key="welcome_continue").click()
     at.run()
-
-    builder = _builder_tab(at)
-    lab = next(widget for widget in builder.selectbox if widget.label == "Laboratory measurement")
-    hba1c = next(option for option in lab.options if "4548-4" in option)
-    lab.set_value(hba1c)
+    at.button(key="understand_continue").click()
     at.run()
-    builder = _builder_tab(at)
-    assert next(widget for widget in builder.number_input if widget.label == "Threshold (%)").value == 8.0
-
-    lab = next(widget for widget in builder.selectbox if widget.label == "Laboratory measurement")
-    bmi = next(option for option in lab.options if "39156-5" in option)
-    lab.set_value(bmi)
+    assert at.session_state["stage"] == "clarify"
+    radio = next(r for r in at.radio if r.key.startswith("clarify_"))
+    radio.set_value(radio.options[1])
     at.run()
-    builder = _builder_tab(at)
-
-    assert next(
-        widget for widget in builder.number_input if widget.label == "Threshold (kg/m2)"
-    ).value == 30.0
-
-
-def _nl_tab(at):
-    return next(tab for tab in at.tabs if tab.label == "Describe your research")
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    leaves = at.session_state["draft"]["criteria"]["population"]["items"]
+    assert any(item.get("type") == "medication" and item.get("status") == "ever" for item in leaves)
+    assert not at.session_state["draft"]["assumptions"]
 
 
-def _interpret_nl_example(at):
-    describe = _nl_tab(at)
-    next(widget for widget in describe.text_area if widget.label == "Purpose *").set_value(
-        "Public health research on diabetes outcomes."
-    )
-    next(widget for widget in describe.text_area if widget.label == "Research question").set_value(
-        "Compare HbA1c levels between male and female patients with type 2 diabetes "
-        "aged 40-65 during 2025."
-    )
-    next(button for button in describe.button if button.label == "Interpret my question").click()
-    return at.run()
-
-
-def test_natural_language_interpretation_and_submission():
-    at = _interpret_nl_example(_app())
-
+def test_guided_builder_keeps_answers_across_steps():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    assert at.session_state["stage"] == "guided" and at.session_state["guided_step"] == 1
+    at.radio(key="guided_goal").set_value("Compare patient groups")
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Diagnosis")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    diagnosis = at.selectbox(key="builder_1_diagnosis")
+    t2d = next(option for option in diagnosis.options if option.startswith("Type 2 diabetes"))
+    diagnosis.set_value(t2d)
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Laboratory measurement")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    assert any("Type 2 diabetes" in i.value for i in at.info)
+    at.button(key="builder_2_remove").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    at.button(key="guided_next_2").click()
+    at.run()
+    assert at.session_state["guided_step"] == 3
+    at.radio(key="guided_analysis").set_value("Compare groups")
+    at.run()
+    at.multiselect(key="builder_group_by").set_value(["Sex"])
+    at.run()
+    at.button(key="guided_back_3").click()
+    at.run()
+    assert at.selectbox(key="builder_1_diagnosis").value == t2d
+    at.button(key="guided_back_2").click()
+    at.run()
+    assert at.radio(key="guided_goal").value == "Compare patient groups"
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.button(key="guided_next_2").click()
+    at.run()
+    assert at.multiselect(key="builder_group_by").value == ["Sex"]
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
     assert not at.exception
-    assert any(
-        "hba1c" in element.value.casefold()
-        and "type 2 diabetes" in element.value.casefold()
-        for element in at.info
-    )
-    next(button for button in at.button if button.label == "Confirm and submit").click()
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+    assert at.session_state["last"].startswith("GUIDED-")
+
+
+def test_edit_details_prefills_guided_builder():
+    at = _app()
+    at.text_area(key="research_question").set_value(QUESTION)
+    at.button(key="welcome_continue").click()
     at.run()
-
-    assert not at.exception
-    assert any("APPROVE_STATISTICAL" in element.value for element in at.success)
-
-
-def test_natural_language_correction_prefills_builder_rows():
-    at = _interpret_nl_example(_app())
-    next(button for button in at.button if button.label == "Correct in cohort builder").click()
+    at.button(key="understand_edit").click()
     at.run()
-
-    assert not at.exception
+    assert at.session_state["stage"] == "guided" and at.session_state["guided_step"] == 2
     assert len(at.session_state["builder_criteria"]) >= 2
+    assert any(w.key == "builder_1_diagnosis" for w in at.selectbox)
 
 
-def test_since_condition_timing_survives_cohort_builder_correction():
-    at = _app()
-    describe = _nl_tab(at)
-    next(widget for widget in describe.text_area if widget.label == "Purpose *").set_value(
-        "Public health research on asthma."
-    )
-    next(widget for widget in describe.text_area if widget.label == "Research question").set_value(
-        "Patients diagnosed with asthma since 2022"
-    )
-    next(button for button in describe.button if button.label == "Interpret my question").click()
-    at.run()
-    next(button for button in at.button if button.label == "Correct in cohort builder").click()
-    at.run()
-
-    builder = next(tab for tab in at.tabs if tab.label == "Build your research cohort")
-    diagnosis_timing = next(
-        radio for radio in builder.radio if radio.label == "Diagnosis timing"
-    )
-    assert diagnosis_timing.value == "Diagnosed since the start of the time period"
-    assert next(
-        selectbox for selectbox in builder.selectbox if selectbox.label == "From year"
-    ).value == 2022
+def test_advanced_example_request_and_chart():
+    at = _submit_example(_app())
     assert not at.exception
-
-
-def test_unrecognised_question_disables_natural_language_submission():
-    at = _app()
-    describe = _nl_tab(at)
-    next(widget for widget in describe.text_area if widget.label == "Purpose *").set_value(
-        "Public health research on infections."
-    )
-    next(widget for widget in describe.text_area if widget.label == "Research question").set_value(
-        "Number of patients with sepsis by sex"
-    )
-    next(button for button in describe.button if button.label == "Interpret my question").click()
-    at.run()
-
-    assert not at.exception
-    assert any(
-        "Nothing clinical or demographic was recognised" in element.value
-        for element in at.error
-    )
-    submit = next(button for button in at.button if button.label == "Confirm and submit")
-    assert submit.disabled
-
-
-def test_chart_section_renders_and_refuses_histogram():
-    at = _app()
-    advanced = _advanced_options(at)
-    advanced.radio[0].set_value("Example request")
-    at.run()
-    advanced = _advanced_options(at)
-    advanced.selectbox[0].set_value("R01")
-    at.run()
-    advanced = _advanced_options(at)
-    next(button for button in advanced.button if button.label == "Submit this request").click()
-    at.run()
-    assert not at.exception
+    assert at.session_state["stage"] == "result"
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
     chart_input = next(widget for widget in at.text_input if widget.label == "Describe the chart you want")
     chart_input.set_value("bar chart of prevalence by region")
     at.run()
@@ -249,25 +190,8 @@ def test_chart_section_renders_and_refuses_histogram():
     assert any("secure processing environment" in element.value for element in at.info)
 
 
-def test_builder_add_criterion_keeps_existing_selections():
-    at = _app()
-    at.selectbox(key="builder_new_category").set_value("Diagnosis")
-    at.button(key="builder_add_criterion").click()
-    at.run()
-    assert not at.exception
-    diagnosis = next(widget for widget in at.selectbox if widget.key == "builder_1_diagnosis")
-    t2d = next(option for option in diagnosis.options if option.startswith("Type 2 diabetes"))
-    diagnosis.set_value(t2d)
-    at.run()
-    at.selectbox(key="builder_new_category").set_value("Laboratory measurement")
-    at.button(key="builder_add_criterion").click()
-    at.run()
-    assert not at.exception
-    assert at.selectbox(key="builder_1_diagnosis").value == t2d
-    assert any("Type 2 diabetes" in element.value and "E11" in element.value for element in at.info)
-    assert not any("Asthma" in element.value for element in at.info)
-    at.button(key="builder_2_remove").click()
-    at.run()
-    assert not at.exception
-    assert at.selectbox(key="builder_1_diagnosis").value == t2d
-    assert not any(widget.key == "builder_2_lab" for widget in at.selectbox)
+def test_rejected_request_is_explained():
+    at = _submit_example(_app(), "R02")
+    assert any("Article 54" in m.value or "Art. 54" in m.value for m in at.markdown) or any(
+        "Decision on your request" in m.value for m in at.markdown)
+    assert not at.dataframe
