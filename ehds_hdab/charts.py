@@ -16,8 +16,8 @@ from .viz import DIMENSION_LABELS, answer_table
 
 TIME_DIMENSION = "Year"
 SUPPRESSED = {"<10", "suppressed", f"<{SMALL_CELL_THRESHOLD}"}
-PALETTE = ["#1F5EFF", "#F08C2E", "#2BB596", "#8E6CF5", "#E05A7A", "#5B6680", "#C9A227", "#3BA7D9", "#7A4F2A", "#9CB4E8"]
-FIXED_COLOURS = {"female": "#E05A7A", "male": "#1F5EFF"}
+PALETTE = ["#2F56D8", "#FF7A6B", "#9A8CF2", "#0E2554", "#2BB596", "#C9A227", "#3BA7D9", "#7A4F2A", "#5C6690", "#B9B0F5"]
+FIXED_COLOURS = {"female": "#FF7A6B", "male": "#2F56D8"}
 REFUSED_TYPES = {
     "pie": "a pie chart hides small differences and cannot show time or more than a handful of groups",
     "donut": "a donut chart hides small differences and cannot show time or more than a handful of groups",
@@ -232,10 +232,10 @@ def altair_chart(plan):
             marker_enc["color"] = alt.Color(f"{colour}:N", scale=alt.Scale(domain=list(plan["colors"]), range=list(plan["colors"].values())), legend=None)
         layers.append(alt.Chart(hidden).mark_text(dy=-8, fontSize=11, fontWeight="bold").encode(**marker_enc))
     figure = alt.layer(*layers).properties(title=alt.TitleParams(plan["title"], anchor="start", fontSize=16,
-                                                                 color="#1B2A4E"), height=360)
-    return figure.configure_axis(grid=True, gridOpacity=0.25, labelColor="#2A3550", titleColor="#1B2A4E",
+                                                                 color="#0E2554"), height=360)
+    return figure.configure_axis(grid=True, gridOpacity=0.25, labelColor="#22305A", titleColor="#0E2554",
                                  labelFontSize=12, titleFontSize=12).configure_view(strokeOpacity=0).configure_legend(
-        labelColor="#2A3550", titleColor="#1B2A4E")
+        labelColor="#22305A", titleColor="#0E2554")
 
 
 def display_table(plan):
