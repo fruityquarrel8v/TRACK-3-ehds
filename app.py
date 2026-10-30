@@ -3,6 +3,7 @@
 Run: streamlit run app.py
 Patient-level data never leaves this machine; no external services are called.
 """
+import copy
 import json
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from ehds_hdab.data import load_data
 from ehds_hdab.nl import interpret_question
 from ehds_hdab.pipeline import process_request
 from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
+from ehds_hdab.viz import answer_table, interpret_chart_command, methodology_text, render_chart
 from ehds_hdab.terminology import display_name, entries
 
 ROOT = Path(__file__).resolve().parent
@@ -84,8 +86,10 @@ def answer_to_frame(answer, dims=()):
     return df.astype(str) if not df.empty else df
 
 
-def store(resp):
+def store(resp, request=None):
     st.session_state.setdefault("decisions", {})[resp["request_id"]] = resp
+    if request is not None:
+        st.session_state.setdefault("requests", {})[resp["request_id"]] = request
 
 
 def show_articles(articles):
@@ -119,6 +123,8 @@ def show_response(resp, staff=False):
                    "Values are rounded to one decimal, halves up.")
         st.download_button("Download statistics (JSON)", json.dumps(answer, indent=2, ensure_ascii=False),
                            file_name=f"{resp['request_id']}_statistics.json", mime="application/json")
+        if not staff:
+            _chart_section(resp)
     elif resp["decision"] == "APPROVE_SPE":
         spe = resp.get("spe") or {}
         st.markdown(f"**Cohort made available in the secure processing environment:** "
@@ -136,6 +142,82 @@ def show_response(resp, staff=False):
             st.json({k: resp.get(k) for k in ("triggered_rules", "privacy_check", "spe") if k in resp})
             st.markdown("**Query plan generated from the request's definitions**")
             st.json(resp.get("query_plan") or {})
+
+
+def _regroup(resp, result):
+    request = st.session_state.get("requests", {}).get(resp["request_id"])
+    if not request or not isinstance(request.get("criteria"), dict):
+        st.info("Regrouping is available for requests made with the cohort builder or the research question box.")
+        return
+    regrouped = copy.deepcopy(request)
+    regrouped["criteria"]["group_by"] = [
+        {"dimension": "age_band", "bands": _age_bands("10-year bands", "")} if dimension == "age_band"
+        else {"dimension": dimension}
+        for dimension in result["regroup"]
+    ]
+    number = st.session_state.get("regroup_number", 0) + 1
+    st.session_state["regroup_number"] = number
+    regrouped["id"] = f"{str(resp['request_id']).split('-G')[0]}-G{number}"
+    with st.spinner("Re-running the request through the approval process..."):
+        new_resp = process_request(regrouped)
+    store(new_resp, regrouped)
+    st.session_state["last"] = new_resp["request_id"]
+    st.session_state.setdefault("chart_specs", {})[new_resp["request_id"]] = result["spec"]
+    st.rerun()
+
+
+def _chart_section(resp):
+    rid = resp["request_id"]
+    plan = resp.get("query_plan") or {}
+    group_by = plan.get("group_by", [])
+    table = answer_table(resp["answer"], group_by)
+    dims = [DIM_LABELS.get(d.get("dimension"), d.get("dimension")) for d in group_by]
+    metrics = [c for c in table.columns if c not in dims]
+    if table.empty or not metrics:
+        return
+    st.markdown("**Visualise these results**")
+    st.caption("Charts are drawn only from the anonymised table above, so they are privacy-safe to export.")
+    specs = st.session_state.setdefault("chart_specs", {})
+    spec = specs.get(rid) or {"type": "bar", "metric": metrics[0], "x": dims[0] if dims else None, "color": None}
+    examples = [
+        f"Bar chart of {metrics[0]} by {dims[0]}" if dims else f"Bar chart of {metrics[0]}",
+        "Change this into a line graph",
+        "Group the results by sex and age",
+    ]
+    command = st.text_input("Describe the chart you want", key=f"chart_cmd_{rid}", placeholder=examples[0])
+    chosen = None
+    for i, (col, example) in enumerate(zip(st.columns(3), examples)):
+        if col.button(example, key=f"chart_ex_{rid}_{i}"):
+            chosen = example
+    command = chosen or command
+    message = ""
+    if command:
+        result = interpret_chart_command(command, spec, metrics, dims)
+        if result["regroup"]:
+            _regroup(resp, result)
+            return
+        if result["ok"]:
+            spec = result["spec"]
+            specs[rid] = spec
+        else:
+            message = result["message"]
+    if message:
+        st.info(message)
+    request = st.session_state.get("requests", {}).get(rid) or {}
+    criteria = request.get("criteria") if isinstance(request.get("criteria"), dict) else None
+    population_text = describe_criteria(criteria) if criteria else str(request.get("question") or rid)
+    period_text = _criteria_period_summary(criteria) if criteria else "As defined in the request"
+    title = f"{spec['metric']} by {spec['x']}" if spec.get("x") else str(spec["metric"])
+    if spec.get("color"):
+        title += f" and {spec['color']}"
+    fig, png = render_chart(table, spec, title, population_text, period_text, "")
+    st.pyplot(fig)
+    with st.expander("Statistical methodology and definitions"):
+        st.write(methodology_text(spec, resp))
+        st.write(f"**Population:** {population_text}")
+        st.write(f"**Time period:** {period_text}")
+    st.download_button("Download chart (PNG)", png, file_name=f"{rid}_chart.png", mime="image/png",
+                       key=f"chart_png_{rid}")
 
 
 def _builder_concepts(data, kind, table=None):
@@ -847,7 +929,7 @@ def page_applicant():
                 }
                 with st.spinner("Assessing request..."):
                     resp = process_request(request)
-                store(resp)
+                store(resp, request)
                 st.session_state["last"] = resp["request_id"]
                 st.session_state["nl_request_number"] = request_number
             if correct_col.button("Correct in cohort builder", key="nl_correct"):
@@ -1083,7 +1165,7 @@ def page_applicant():
         ):
             with st.spinner("Assessing request..."):
                 resp = process_request(builder_request)
-            store(resp)
+            store(resp, builder_request)
             st.session_state["last"] = resp["request_id"]
             st.session_state["builder_request_number"] = request_number
 
@@ -1166,7 +1248,7 @@ def page_applicant():
                 }
                 with st.spinner("Assessing request..."):
                     resp = process_request(request)
-                store(resp)
+                store(resp, request)
                 st.session_state["last"] = resp["request_id"]
         if (
             source != "Fill in a form (challenge format)"
@@ -1175,7 +1257,7 @@ def page_applicant():
         ):
             with st.spinner("Assessing request..."):
                 resp = process_request(request)
-            store(resp)
+            store(resp, request)
             st.session_state["last"] = resp["request_id"]
     last = st.session_state.get("decisions", {}).get(st.session_state.get("last"))
     if last:
@@ -1187,7 +1269,7 @@ def page_staff():
     st.header("Staff dashboard")
     if st.button("Process all example requests"):
         for req in example_requests().values():
-            store(process_request(req))
+            store(process_request(req), req)
     decisions = st.session_state.get("decisions", {})
     if not decisions:
         st.info("No requests processed yet in this session.")

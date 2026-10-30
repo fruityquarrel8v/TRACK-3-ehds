@@ -224,3 +224,26 @@ def test_unrecognised_question_disables_natural_language_submission():
     )
     submit = next(button for button in at.button if button.label == "Confirm and submit")
     assert submit.disabled
+
+
+def test_chart_section_renders_and_refuses_histogram():
+    at = _app()
+    advanced = _advanced_options(at)
+    advanced.radio[0].set_value("Example request")
+    at.run()
+    advanced = _advanced_options(at)
+    advanced.selectbox[0].set_value("R01")
+    at.run()
+    advanced = _advanced_options(at)
+    next(button for button in advanced.button if button.label == "Submit this request").click()
+    at.run()
+    assert not at.exception
+    chart_input = next(widget for widget in at.text_input if widget.label == "Describe the chart you want")
+    chart_input.set_value("bar chart of prevalence by region")
+    at.run()
+    assert not at.exception
+    assert any(button.label == "Download chart (PNG)" for button in at.get("download_button"))
+    chart_input = next(widget for widget in at.text_input if widget.label == "Describe the chart you want")
+    chart_input.set_value("histogram of HbA1c")
+    at.run()
+    assert any("secure processing environment" in element.value for element in at.info)

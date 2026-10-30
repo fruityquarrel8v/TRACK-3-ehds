@@ -18,7 +18,7 @@ _STOPWORDS = {
     "hospitalizations", "in", "include", "incident", "inpatient", "is",
     "individuals", "latest", "level", "levels", "less", "male", "males",
     "many", "mean",
-    "measurement", "measurements", "men", "new", "newly", "no", "not",
+    "measurement", "measurements", "men", "never", "new", "newly", "no", "not",
     "number", "of", "on", "or", "overall", "older", "over", "patients",
     "per", "period", "people", "prescribed", "prescription", "prevalence",
     "region", "regions", "results", "sex", "show", "since", "stay", "stays",

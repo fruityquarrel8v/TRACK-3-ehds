@@ -269,6 +269,7 @@ def test_medication_negation_phrases_exclude_the_concept():
         assert medication["exclude"] is True, phrase
         if phrase.startswith("never prescribed"):
             assert medication["status"] == "ever"
+            assert "never" not in interpretation.unrecognised
 
 
 def test_copd_without_active_lama_in_klinikum_nord_matches_pandas():

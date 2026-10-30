@@ -396,7 +396,7 @@ def _period_text(start, end):
     return f" through {end}"
 
 
-def _describe_leaf(item):
+def _describe_leaf(item, excluded=False):
     kind = item.get("type")
     label = str(item.get("label") or kind or "criterion")
     if kind == "condition":
@@ -426,10 +426,15 @@ def _describe_leaf(item):
         codes = _codes_text(item.get("atc"))
         result = label + (f" (ATC {codes})" if codes else "")
         status = item.get("status")
+        excluded = excluded or bool(item.get("exclude"))
         if status == "ever":
-            return f"ever prescribed {result}"
+            action = "never prescribed" if excluded else "ever prescribed"
+            return f"{action} {result}"
         if status == "during_period":
-            return f"prescribed {result} during the time period"
+            action = "not prescribed" if excluded else "prescribed"
+            return f"{action} {result} during the time period"
+        if excluded:
+            return f"not taking {result} on 31 December 2025"
         return f"taking {result} (active on 31 December 2025)"
     if kind == "lab":
         loinc = item.get("loinc")
@@ -479,8 +484,14 @@ def _describe_item(item, negated=False):
         else:
             description = "who meet all of: " + " and ".join(parts)
     else:
-        description = _describe_leaf(item)
-    return f"without {description}" if negated or item.get("exclude") else description
+        excluded = negated or bool(item.get("exclude"))
+        description = _describe_leaf(
+            item,
+            excluded=excluded and item.get("type") == "medication",
+        )
+    if (negated or item.get("exclude")) and item.get("type") != "medication":
+        return f"without {description}"
+    return description
 
 
 def describe_criteria(criteria) -> str:

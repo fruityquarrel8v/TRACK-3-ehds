@@ -521,7 +521,21 @@ def test_describe_criteria_includes_labels_codes_and_exclusion():
     assert "Type 2 diabetes" in description
     assert "E11" in description
     assert "A10BA02" in description
-    assert "without" in description
+    assert "not taking Metformin (ATC A10BA02) on 31 December 2025" in description
+    assert "without taking" not in description
+
+
+def test_describe_excluded_ever_prescribed_medication():
+    description = describe_criteria(_criteria([{
+        "type": "medication",
+        "label": "Metformin",
+        "atc": ["A10BA02"],
+        "status": "ever",
+        "exclude": True,
+    }]))
+
+    assert "never prescribed Metformin (ATC A10BA02)" in description
+    assert "without ever prescribed" not in description
 
 
 def test_describe_condition_onset_timing_with_human_readable_dates():
