@@ -16,6 +16,18 @@
 </p>
 
 <p align="center">
+  <a href="https://healthcare-rocket.streamlit.app/"><img alt="Try the live application" src="https://img.shields.io/badge/%F0%9F%9A%80%20TRY%20THE%20LIVE%20APPLICATION-healthcare--rocket.streamlit.app-BE4F7A?style=for-the-badge"></a>
+  <a href="https://youtu.be/VB1GhmBXSbA"><img alt="Watch the 2-minute demo" src="https://img.shields.io/badge/%F0%9F%8E%AC%20WATCH%20THE%202--MINUTE%20DEMO-YouTube-1C2844?style=for-the-badge"></a>
+  <a href="https://github.com/fruityquarrel8v/TRACK-3-ehds/tree/devin/1793301500-ehds-prototype"><img alt="Explore the source code" src="https://img.shields.io/badge/%F0%9F%92%BB%20EXPLORE%20THE%20SOURCE%20CODE-GitHub%20branch-269D9B?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  🚀 <strong>Try the live application:</strong> <a href="https://healthcare-rocket.streamlit.app/">https://healthcare-rocket.streamlit.app/</a><br>
+  🎬 <strong>Watch the 2-minute demo:</strong> <a href="https://youtu.be/VB1GhmBXSbA">https://youtu.be/VB1GhmBXSbA</a><br>
+  💻 <strong>Explore the source code:</strong> <a href="https://github.com/fruityquarrel8v/TRACK-3-ehds/tree/devin/1793301500-ehds-prototype">https://github.com/fruityquarrel8v/TRACK-3-ehds/tree/devin/1793301500-ehds-prototype</a>
+</p>
+
+<p align="center">
   <a href="#watch-the-2-minute-demo">Demo video</a> ·
   <a href="#why-healthcare-rocket">Why HealthCare Rocket?</a> ·
   <a href="#a-60-second-example">Example</a> ·
@@ -32,16 +44,32 @@
 
 **The problem.** Under the European Health Data Space (EHDS, Regulation (EU) 2025/327) a researcher who wants health data must file a formal request with a Health Data Access Body, which has to judge the *purpose* (research yes, insurance pricing no), translate clinical language into codes, compute the statistics and make sure nothing identifiable leaves the building. Today that takes legal expertise, programming skills and months of waiting.
 
-**The solution.** HealthCare Rocket is a researcher-friendly gateway prototype for the EHDS. A researcher types a clinical question in plain English; the gateway interprets the medical terminology, asks back only when a detail changes the result, checks *why* the data is wanted, applies the privacy rules and calculates the answer deterministically from the data. Every decision is explained in plain language and cites the article it rests on.
+**The solution.** HealthCare Rocket is a researcher-friendly gateway prototype for the EHDS. It does more than answer research questions: **it evaluates whether the requested use is permissible before releasing any result.**
 
-> **An AI system that knows when to answer, when to ask, and when to say no.**
+| | |
+|---|---|
+| **ASK** | Researchers describe clinical questions in everyday language — "How many patients have type 2 diabetes?" — and the gateway maps them to clinical terminology (ICD-10, ATC, LOINC), asking back only when a detail changes the result. |
+| **ANALYZE** | Deterministic calculations on the data produce meaningful statistics — counts, prevalence, means, yearly trends — with interactive visualisations and a methodology note. |
+| **PROTECT** | EHDS-inspired rules reject prohibited purposes (Art. 54), hold uncertain requests for human review, and apply statistical disclosure safeguards: opt-out exclusion, small-cell suppression and a disclosure ledger against differencing. |
+
+Every decision is explained in plain language and cites the article it rests on.
+
+> **A gateway that knows when to answer, when to ask, and when to say no.**
 
 The prototype was built by a final-year medical student as the sole hackathon participant. Its ambition is to connect three things that are usually kept apart: **medical understanding**, **research usability** and **responsible health-data access**.
 
 ## Watch the 2-minute demo
 
-> 🎬 **Video link: _coming soon_** — the final URL will be added here after upload.
-> The video shows a legitimate diabetes question answered with statistics and a chart, a prohibited insurance request being rejected, and what happens when a question is ambiguous.
+<p align="center"><a href="https://youtu.be/VB1GhmBXSbA"><img alt="HealthCare Rocket – 2-minute demo on YouTube" src="https://img.youtube.com/vi/VB1GhmBXSbA/hqdefault.jpg" width="480"></a><br>
+🎬 <a href="https://youtu.be/VB1GhmBXSbA"><strong>https://youtu.be/VB1GhmBXSbA</strong></a></p>
+
+The video shows three recorded demonstrations on the synthetic dataset:
+
+| | Demonstration | What happens |
+|---|---|---|
+| **Demo 1** | **Clinical research** | A researcher asks how many patients have type 2 diabetes. HealthCare Rocket recognises ICD-10 E11, evaluates the research purpose and returns **1,152** eligible patients. |
+| **Demo 2** | **Interactive statistics** | The researcher investigates **newly recorded** type 2 diabetes diagnoses from 2023 to 2025: **2023: 36 · 2024: 35 · 2025: 34** (first recorded diagnoses within each year — not cumulative prevalence). The application displays the results as interactive statistical visualisations. |
+| **Demo 3** | **Prohibited insurance purpose** | A health insurance company requests diabetes statistics to increase insurance premiums. The application rejects the request under EHDS **Article 54** without releasing any statistics. |
 
 ## Why HealthCare Rocket?
 
@@ -148,7 +176,9 @@ app.py (Streamlit): decision + reason + legal basis, result table, headline numb
 Altair chart (Line | Bar | Table), methodology note
 ```
 
-**Three principles.** *AI interprets the question. Deterministic systems calculate the answer. Independent safeguards determine what can safely be released.* The interpreter never touches patient data and never produces a number; the engine computes; privacy, the ledger and the release gate decide what leaves.
+**Three principles.** *A rule-based interpreter reads the question. Deterministic systems calculate the answer. Independent safeguards determine what can safely be released.* The interpreter never touches patient data and never produces a number; the engine computes; privacy, the ledger and the release gate decide what leaves.
+
+**About the "AI".** In the submitted prototype the natural-language interpretation is **deterministic and rule-based** (`ehds_hdab/nl.py`): dictionaries of medical terms and explicit sentence patterns, with documented defaults. No generative model performs the interpretation or generates the answers. Optional Ollama/Mistral adapters exist in `ehds_hdab/providers.py` behind the same structured-criteria schema, but they are **not enabled and not validated** in the default implementation.
 
 ### Main components
 
@@ -187,11 +217,13 @@ Python 3.10+, [pandas](https://pandas.pydata.org/) (data processing), [Streamlit
 ### Run it
 
 ```bash
-git clone https://github.com/fruityquarrel8v/TRACK-3-ehds.git
+git clone -b devin/1793301500-ehds-prototype https://github.com/fruityquarrel8v/TRACK-3-ehds.git
 cd TRACK-3-ehds
 pip install -r requirements.txt
 streamlit run app.py                      # web app → http://localhost:8501
 ```
+
+Or skip the installation and use the hosted instance: **https://healthcare-rocket.streamlit.app/** (same code, same synthetic data).
 
 Other entry points:
 
