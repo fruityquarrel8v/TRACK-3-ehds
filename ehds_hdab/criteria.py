@@ -5,7 +5,9 @@ import re
 from .plan import QueryPlan
 
 
-_DIMENSIONS = {"sex", "age_band", "region", "data_holder"}
+_DIMENSIONS = {"sex", "age_band", "region", "data_holder", "year"}
+DEFAULT_YEARS = (2023, 2025)
+MAX_YEAR_SPAN = 30
 _RECORD_TYPES = {"conditions", "medications", "observations", "encounters"}
 _LAB_OPERATORS = {">", ">=", "<", "<=", "present"}
 
@@ -63,6 +65,31 @@ def _valid_values(value):
     if not isinstance(value, (list, tuple)):
         return []
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+
+
+def _default_years(criteria):
+    """Years for a 'year' grouping: the request's own period if it names one, else DEFAULT_YEARS."""
+    years = []
+
+    def visit(item):
+        if not isinstance(item, dict):
+            return
+        for child in item.get("items", []) or []:
+            visit(child)
+        for key in ("period_start", "onset_start", "period_end", "onset_end"):
+            value = item.get(key)
+            if isinstance(value, str) and re.match(r"\d{4}", value):
+                years.append(int(value[:4]))
+
+    population = criteria.get("population")
+    if isinstance(population, dict):
+        for item in population.get("items", []) or []:
+            visit(item)
+    for metric in criteria.get("metrics", []) or []:
+        visit(metric)
+    if years:
+        return min(years), max(years)
+    return DEFAULT_YEARS
 
 
 def _valid_leaf(item):
@@ -298,8 +325,19 @@ def plan_from_criteria(criteria) -> QueryPlan:
                 plan.warnings.append("Could not apply grouping 'age_band' — staff review required.")
                 continue
             dimensions.append({"dimension": name, "bands": valid_bands})
+        elif name == "year":
+            default_from, default_to = _default_years(criteria)
+            start = _integer(dimension.get("from")) if dimension.get("from") is not None else default_from
+            end = _integer(dimension.get("to")) if dimension.get("to") is not None else default_to
+            if start is None or end is None or start > end or end - start > MAX_YEAR_SPAN:
+                plan.warnings.append("Could not apply grouping 'year' — staff review required.")
+                continue
+            if any(d["dimension"] == "year" for d in dimensions):
+                continue
+            dimensions.append({"dimension": "year", "from": start, "to": end})
         else:
             dimensions.append({"dimension": name})
+    dimensions.sort(key=lambda d: d["dimension"] != "year")
     plan.group_by = dimensions
 
     record_types = criteria.get("record_types", []) or []

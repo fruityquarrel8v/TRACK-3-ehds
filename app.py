@@ -62,7 +62,7 @@ def example_requests():
             for p in sorted(REQUESTS_DIR.glob("R*.json"))}
 
 
-DIM_LABELS = {"region": "Region", "age_band": "Age band", "data_holder": "Hospital", "sex": "Sex"}
+DIM_LABELS = {"year": "Year", "region": "Region", "age_band": "Age band", "data_holder": "Hospital", "sex": "Sex"}
 
 
 def answer_to_frame(answer, dims=()):
@@ -159,8 +159,11 @@ def _regroup(resp, result):
         st.info("Regrouping is available for requests made with the cohort builder or the research question box.")
         return
     regrouped = copy.deepcopy(request)
+    existing_years = next((d for d in request["criteria"].get("group_by", []) or []
+                           if isinstance(d, dict) and d.get("dimension") == "year"), None)
     regrouped["criteria"]["group_by"] = [
         {"dimension": "age_band", "bands": _age_bands("10-year bands", "")} if dimension == "age_band"
+        else (existing_years or {"dimension": "year"}) if dimension == "year"
         else {"dimension": dimension}
         for dimension in result["regroup"]
     ]
@@ -187,12 +190,19 @@ def _chart_section(resp):
     st.markdown("**Visualise these results**")
     st.caption("Charts are drawn only from the anonymised table above, so they are privacy-safe to export.")
     specs = st.session_state.setdefault("chart_specs", {})
-    spec = specs.get(rid) or {"type": "bar", "metric": metrics[0], "x": dims[0] if dims else None, "color": None}
-    examples = [
-        f"Bar chart of {metrics[0]} by {dims[0]}" if dims else f"Bar chart of {metrics[0]}",
-        "Change this into a line graph",
-        "Group the results by sex and age",
-    ]
+    has_year = "Year" in dims
+    default_x = "Year" if has_year else (dims[0] if dims else None)
+    default_color = next((d for d in dims if d != default_x), None) if has_year else None
+    spec = specs.get(rid) or {"type": "line" if has_year else "bar", "metric": metrics[0],
+                              "x": default_x, "color": default_color}
+    if has_year:
+        examples = [f"Line graph of {metrics[0]} by year", "Change this into a bar chart",
+                    "Group the results by year and sex"]
+    elif dims:
+        examples = [f"Bar chart of {metrics[0]} by {dims[0]}", "Show this by year as a line graph",
+                    "Group the results by sex and age"]
+    else:
+        examples = ["Show this by year as a line graph", "Compare by sex", "Compare by region"]
     command = st.text_input("Describe the chart you want", key=f"chart_cmd_{rid}", placeholder=examples[0])
     chosen = None
     for i, (col, example) in enumerate(zip(st.columns(3), examples)):
@@ -212,6 +222,10 @@ def _chart_section(resp):
             message = result["message"]
     if message:
         st.info(message)
+    if not dims:
+        st.caption("A single number is not charted. Ask for a comparison (by sex, age, region, hospital) or a "
+                   "trend by year to get a chart.")
+        return
     request = st.session_state.get("requests", {}).get(rid) or {}
     criteria = request.get("criteria") if isinstance(request.get("criteria"), dict) else None
     population_text = describe_criteria(criteria) if criteria else str(request.get("question") or rid)
@@ -491,6 +505,13 @@ def _prefill_builder(criteria, applicant, purpose, request_type):
         for item in group_by
         if item.get("dimension") in dimension_labels
     ]
+    year_group = next((item for item in group_by if item.get("dimension") == "year"), None)
+    if year_group:
+        st.session_state["guided_analysis"] = "Explore changes over time"
+        st.session_state["builder_year_from"] = int(year_group.get("from") or 2023)
+        st.session_state["builder_year_to"] = int(year_group.get("to") or 2025)
+    elif st.session_state.get("guided_analysis") == "Explore changes over time":
+        st.session_state["guided_analysis"] = "Compare groups" if group_by else "Count patients"
     age_group = next(
         (item for item in group_by if item.get("dimension") == "age_band"),
         None,
@@ -1144,6 +1165,9 @@ def _interpretation_rows(criteria):
         for g in group_by:
             if g.get("dimension") == "age_band":
                 detail = "Age bands: " + ", ".join(b["label"] for b in g.get("bands", []))
+            if g.get("dimension") == "year":
+                span = f"{g['from']}\u2013{g['to']}" if g.get("from") and g.get("to") else "2023\u20132025 or the period given"
+                detail = (f"Per calendar year ({span}); " + detail) if detail else f"Per calendar year ({span})"
         rows.append(("Compare by", " and ".join(names), detail))
     period = _criteria_period_summary(criteria) if isinstance(criteria, dict) else ""
     if period and period != "No time period applied.":
@@ -1522,14 +1546,32 @@ def _analysis_step(data, period_start, period_end):
         "Count patients": "How many patients meet your criteria.",
         "Compare groups": "See how results differ between men and women, age bands, regions or hospitals.",
         "Calculate a mean": "The average of each patient's latest laboratory value (within the period if set).",
-        "Explore changes over time": "Not available yet in this prototype: results cannot be grouped by year or month. "
-                                     "You can compare groups instead.",
+        "Explore changes over time": "Results per calendar year, shown as a line graph. Each year counts diagnoses "
+                                     "recorded by 31 December, medication status on 31 December, the latest "
+                                     "laboratory value within the year and hospital stays within the year.",
     }
     st.caption(explanations[analysis])
     group_by = []
-    if analysis in ("Compare groups", "Calculate a mean"):
+    if analysis == "Explore changes over time":
+        all_years = sorted({int(v) for table, column in (("conditions", "onset_date"), ("observations", "date"),
+                                                        ("medications", "start_date"), ("encounters", "start_date"))
+                            for v in data[table][column].dropna().dt.year.unique() if int(v) <= 2025})
+        y1, y2 = st.columns(2)
+        for key, default in (("builder_year_from", 2023), ("builder_year_to", 2025)):
+            if st.session_state.get(key) not in all_years:
+                st.session_state[key] = default if default in all_years else all_years[-1]
+        year_from = y1.selectbox("From year", all_years, key="builder_year_from")
+        year_to = y2.selectbox("To year", all_years, key="builder_year_to")
+        if year_from > year_to:
+            st.warning("The first year must not be after the last year.")
+            year_from, year_to = year_to, year_from
+        group_by.append({"dimension": "year", "from": int(year_from), "to": int(year_to)})
+        st.caption("Laboratory, medication and hospital data cover 2023\u20132025; earlier years show diagnoses only. "
+                   "Age is as of 31 December 2025 for every year.")
+    if analysis in ("Compare groups", "Calculate a mean", "Explore changes over time"):
         choices = {"Sex": "sex", "Age band": "age_band", "Region": "region", "Hospital": "data_holder"}
-        selected = st.multiselect("Compare by", list(choices), key="builder_group_by")
+        selected = st.multiselect("Also compare by" if analysis == "Explore changes over time" else "Compare by",
+                                  list(choices), key="builder_group_by")
         for label in selected:
             dimension = choices[label]
             if dimension == "age_band":
@@ -1546,7 +1588,8 @@ def _analysis_step(data, period_start, period_end):
                 group_by.append({"dimension": dimension})
     metrics = [{"type": "count_patients", "label": "patients"}]
     want_mean = analysis == "Calculate a mean" or (
-        analysis == "Compare groups" and st.checkbox("Also compare a laboratory value", key="builder_mean_enabled"))
+        analysis in ("Compare groups", "Explore changes over time")
+        and st.checkbox("Also compare a laboratory value", key="builder_mean_enabled"))
     if want_mean:
         lab_options = _builder_concepts(data, "observation")
         selected_lab = st.selectbox("Laboratory value", [o["label"] for o in lab_options], key="builder_mean_lab")

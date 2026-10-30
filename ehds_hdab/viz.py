@@ -15,8 +15,10 @@ DIMENSION_LABELS = {
     "age_band": "Age band",
     "region": "Region",
     "data_holder": "Hospital",
+    "year": "Year",
 }
 _DIMENSION_PATTERNS = {
+    "year": re.compile(r"\byears?\b|\byearly\b|\bannual(?:ly)?\b|\bover\s+time\b|\btrends?\b|\btime\b", re.I),
     "sex": re.compile(r"\b(?:sex|gender)\b", re.I),
     "age_band": re.compile(r"\bage(?:\s+(?:band|group))?\b", re.I),
     "region": re.compile(r"\bregions?\b", re.I),
@@ -28,14 +30,12 @@ _REFUSED_CHART = re.compile(
     r"\bdistribution\s+of\s+(?:an?\s+)?(?:individuals?|patients?)\b",
     re.I,
 )
-_REFUSED_TREND = re.compile(
-    r"\btrend\b|\bover\s+time\b|\bmonthly\b|\byearly\b|"
-    r"\bper\s+(?:year|month)\b",
-    re.I,
-)
+_REFUSED_MONTHLY = re.compile(r"\bmonthly\b|\bper\s+month\b|\bby\s+month\b|\bmonths?\b", re.I)
+_TIME_CUE = re.compile(r"\bover\s+time\b|\btrends?\b|\byearly\b|\bannual(?:ly)?\b|\bper\s+year\b|"
+                       r"\bby\s+year\b|\beach\s+year\b|\btime\s+series\b", re.I)
 _HELP_MESSAGE = (
     "Try a bar chart of patients by sex, a line graph of mean HbA1c by age band, "
-    "or group the results by region."
+    "group the results by region, or show the results by year as a line graph."
 )
 _PATIENT_COUNT_WORDS = {"patient", "patients", "number", "count", "prevalence"}
 _METRIC_WORDS = {
@@ -161,21 +161,25 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
             "spec": spec,
             "regroup": None,
         }
-    if _REFUSED_TREND.search(command):
+    if _REFUSED_MONTHLY.search(command):
         return {
             "ok": False,
-            "message": "Trends over time are not available yet.",
+            "message": "Trends over time are available per calendar year only; monthly results are not "
+                       "available in this prototype. Try 'show this by year as a line graph'.",
             "spec": spec,
             "regroup": None,
         }
 
     recognized = False
+    time_cue = bool(_TIME_CUE.search(command))
     if re.search(r"\bline\b", command, re.I):
         spec["type"] = "line"
         recognized = True
     elif re.search(r"\b(?:bar|columns?)\b", command, re.I):
         spec["type"] = "bar"
         recognized = True
+    elif time_cue:
+        spec["type"] = "line"
 
     chosen_metric = _metric_choice(command, metrics)
     if chosen_metric is not None:
@@ -183,6 +187,8 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
         recognized = True
 
     requested = _requested_dimensions(command)
+    if time_cue and "year" not in requested:
+        requested.insert(0, "year")
     if requested:
         recognized = True
         requested_columns = [

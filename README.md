@@ -89,7 +89,7 @@ Implemented now: everything above, on the supplied synthetic dataset, for the 15
 
 Not implemented / future work:
 - The ledger detects subset/complement differencing between released counts. It does not model combinations of three or more queries, means, external knowledge, or results released before the ledger existed. Production SDC would need cumulative-release accounting.
-- Trends over time (per year/month) are not available; the assistant says so.
+- Trends over time are available per calendar year ("by year", "trends", "over time"): the request is evaluated once per year (diagnoses recorded by 31 December of that year, or within it for new cases; medication status on 31 December; latest laboratory value within the year; hospital stays within the year; age as of 31 December 2025) and shown as a line graph. Monthly results are not available; the assistant says so.
 - Interpretation is rule-based; questions outside the dictionary are reported as not recognised rather than guessed. A local (Ollama) or European (Mistral) model could be added behind the same structured-criteria schema with output validation; it was not tested here.
 - Real clinical data would bring missing values, inconsistent coding, mixed units and free text; the loader and terminology layer are the place for a future harmonisation step (code normalisation, unit checks, provenance). Before any real deployment: validation on representative datasets, clinical review of definitions, independent privacy/security assessment and human oversight.
 - Decisions are simulated for demonstration and are not legally binding decisions of a Health Data Access Body.
@@ -202,7 +202,7 @@ data.py (pandas, opted-out patients removed from all 5 tables at load time)
 ## What works and what does not
 
 - Works: all 10 example requests; new requests with other conditions, medications, lab values, encounter filters (incl. main diagnosis `primary_icd10`), grouping by hospital/sex/age band/region, ratio definitions, and decision wording beyond the examples (tested in `tests/`).
-- Limits: trends over time (per month/year) are not available (the assistant says so instead of guessing); nested criteria groups are not editable in the guided builder; the differencing guard works per applicant within one app session and at cohort level only. The parser understands the definition style used in the challenge requests, not arbitrary prose; unusual phrasing produces a staff-review warning. Art. 54 detection is keyword/pattern based, so a cleverly disguised purpose could pass and needs a human reviewer. The SPE is a simulation (a locked folder + blocked export API), not a real isolated compute environment.
+- Limits: trends are per calendar year only (no monthly results; age is as of 31 December 2025 for every year); the guided builder shows one level of AND/OR grouping (deeper nesting only via the JSON input); the disclosure ledger compares count cells for nested populations differing by 1–9 patients, not percentages, means or combinations of three or more queries. The parser understands the definition style used in the challenge requests, not arbitrary prose; unusual phrasing produces a staff-review warning. Art. 54 detection is keyword/pattern based, so a cleverly disguised purpose could pass and needs a human reviewer. The SPE is a simulation (a locked folder + blocked export API), not a real isolated compute environment.
 
 
 ---

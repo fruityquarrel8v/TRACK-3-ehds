@@ -361,8 +361,23 @@ def _gender_info(text):
     return [], [], []
 
 
+TREND_WORDS = re.compile(
+    r"\b(?:trends?|over\s+time|time\s+series|yearly|annual(?:ly)?|per\s+year|by\s+year|each\s+year|"
+    r"year\s+by\s+year|monthly|per\s+month|by\s+month)\b", re.I)
+YEARLY_ASSUMPTION = (
+    "Results are shown per calendar year: diagnoses recorded by 31 December of each year, medication "
+    "status as of 31 December of each year, the latest laboratory value within each year, hospital stays "
+    "within each year; age as of 31 December 2025."
+)
+
+
 def _grouping(text, assumptions):
     groups = []
+    if TREND_WORDS.search(text):
+        groups.append({"dimension": "year"})
+        assumptions.append(YEARLY_ASSUMPTION)
+        if re.search(r"\b(?:monthly|per\s+month|by\s+month)\b", text, re.I):
+            assumptions.append("Monthly results are not available in this prototype; shown per year instead.")
     if re.search(r"\b(?:by|between|across|per)\s+(?:age(?:\s+(?:bands?|groups?))?|age\s*bands?)\b", text, re.I):
         groups.append({"dimension": "age_band", "bands": _AGE_BANDS})
         assumptions.append("Age-band results use 10-year bands.")
@@ -535,10 +550,6 @@ def interpret_question(text: str) -> Interpretation:
     text = str(text or "")
     periods = _periods(text)
     assumptions = []
-    if re.search(r"\b(?:trends?|over\s+time|monthly|yearly|per\s+(?:year|month))\b", text, re.I):
-        assumptions.append(
-            "Trends over time are not available in this prototype; the result covers the whole selected period."
-        )
     nodes = []
     recognised_spans = []
     concept_spans = _concept_matches(text)
@@ -693,6 +704,8 @@ def interpret_question(text: str) -> Interpretation:
         })
     recognised_spans.extend(gender_spans)
     group_by = _grouping(text, assumptions)
+    if any(item["dimension"] == "year" for item in group_by):
+        recognised_spans.extend(match.span() for match in TREND_WORDS.finditer(text))
     if any(item["dimension"] == "age_band" for item in group_by):
         recognised_spans.extend(
             match.span() for match in re.finditer(

@@ -3,6 +3,8 @@ from itertools import product
 
 import pandas as pd
 
+import copy
+
 from .config import REFERENCE_DATE
 
 
@@ -58,7 +60,7 @@ def _concept_patients(key, plan, data):
         medications = data["medications"]
         mask = _prefix_match(medications["atc"], spec.get("atc_prefixes", []))
         if spec.get("active_only"):
-            reference = pd.Timestamp(REFERENCE_DATE)
+            reference = pd.Timestamp(spec.get("as_of") or REFERENCE_DATE)
             mask &= medications["start_date"].le(reference)
             mask &= medications["end_date"].isna() | medications["end_date"].ge(reference)
         if spec.get("period_start"):
@@ -130,7 +132,39 @@ def _dimension_values(dim, data):
         return [band["label"] for band in bands], bands
     if name in ("region", "data_holder", "sex"):
         return data["categories"].get(name, []), None
+    if name == "year":
+        return [str(year) for year in range(int(dim["from"]), int(dim["to"]) + 1)], None
     return [], None
+
+
+def _plan_for_year(plan, year):
+    """The same plan evaluated for one calendar year: diagnoses recorded by 31 Dec of that year (or within
+    it when the request asks for new cases), medication status as of 31 Dec, latest lab value within the
+    year, hospital stays within the year. Age stays as of the reference date."""
+    start, end = f"{year}-01-01", f"{year}-12-31"
+    yearly = copy.deepcopy(plan)
+    for spec in yearly.concepts.values():
+        kind = spec.get("kind")
+        if kind == "condition":
+            if spec.get("onset_year") is not None:
+                spec["onset_year"] = year
+            elif spec.get("onset_start") and spec.get("onset_end"):
+                spec["onset_start"], spec["onset_end"] = start, end
+            else:
+                spec["onset_end"] = end
+        elif kind == "medication":
+            if spec.get("active_only"):
+                spec["as_of"] = end
+            elif spec.get("period_start") or spec.get("period_end"):
+                spec["period_start"], spec["period_end"] = start, end
+            else:
+                spec["period_end"] = end
+        elif kind == "observation":
+            spec["date_start"], spec["date_end"] = start, end
+        elif kind == "encounter":
+            spec.pop("start_year", None)
+            spec["start_start"], spec["start_end"] = start, end
+    return yearly
 
 
 def _selected_observations(metric, population, plan, data):
@@ -198,6 +232,26 @@ def _age_band_series(ages, bands):
 
 
 def execute(plan, data):
+    year_dims = [dim for dim in plan.group_by if dim.get("dimension") == "year"]
+    if not year_dims:
+        return _execute(plan, data)
+    year_dim = year_dims[0]
+    inner = copy.copy(plan)
+    inner.group_by = [dim for dim in plan.group_by if dim.get("dimension") != "year"]
+    groups = []
+    for year in range(int(year_dim["from"]), int(year_dim["to"]) + 1):
+        result = _execute(_plan_for_year(inner, year), data)
+        for group in result["groups"]:
+            sub = list(group["path"]) if inner.group_by else []
+            groups.append({"path": [str(year), *sub], "values": group["values"]})
+    return {
+        "groups": groups,
+        "dimensions": ["year", *[dim["dimension"] for dim in inner.group_by]],
+        "metrics": [{"id": item["id"], "label": item["label"], "type": item["type"]} for item in plan.metrics],
+    }
+
+
+def _execute(plan, data):
     dims = plan.group_by
     choices = [_dimension_values(dim, data)[0] for dim in dims]
     paths = list(product(*choices)) if choices else [("All",)]

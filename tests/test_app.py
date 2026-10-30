@@ -325,3 +325,42 @@ def test_builder_year_boxes_survive_adding_a_row():
     at.run()
     assert at.selectbox(key="builder_from_year").value == 2024
     assert at.selectbox(key="builder_to_year").value == 0
+
+
+def test_trend_question_gives_results_per_year_and_a_chart():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show HbA1c trends in patients with type 2 diabetes")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert any("Per calendar year" in m.value for m in at.markdown)
+    at.button(key="understand_continue").click()
+    at.run()
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    resp = at.session_state["decisions"][at.session_state["last"]]
+    assert list(resp["answer"]) == ["2023", "2024", "2025"]
+    assert not any("single number is not charted" in c.value for c in at.caption)
+    assert any(b.label.startswith("Line graph of") for b in at.button)
+
+
+def test_guided_over_time_builds_year_grouping():
+    at = _app()
+    at.button(key="start_guided").click()
+    at.run()
+    at.button(key="guided_next_1").click()
+    at.run()
+    at.selectbox(key="builder_new_category").set_value("Diagnosis")
+    at.button(key="builder_add_criterion").click()
+    at.run()
+    at.button(key="guided_next_2").click()
+    at.run()
+    at.radio(key="guided_analysis").set_value("Explore changes over time")
+    at.run()
+    at.selectbox(key="builder_year_from").set_value(2024)
+    at.run()
+    at.button(key="guided_next_3").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    assert at.session_state["draft"]["criteria"]["group_by"][0] == {"dimension": "year", "from": 2024, "to": 2025}
