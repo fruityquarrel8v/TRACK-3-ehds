@@ -115,6 +115,10 @@ def show_response(resp, staff=False):
             "Results withheld for differencing protection. Staff review required.",
         )
         st.warning(reason)
+        if resp.get("safe_alternatives"):
+            st.markdown("**What you can do instead:**")
+            for alternative in resp["safe_alternatives"]:
+                st.markdown(f"- {alternative}")
     elif resp["decision"] == "APPROVE_STATISTICAL" and answer:
         st.markdown("**Result (anonymised statistics)**")
         st.dataframe(answer_to_frame(answer, (resp.get("query_plan") or {}).get("group_by", [])), hide_index=True, width="stretch")

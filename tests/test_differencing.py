@@ -81,8 +81,7 @@ def test_small_population_difference_is_withheld_and_audited(tmp_path):
         warning for warning in second["warnings"]
         if warning.startswith("Results withheld:")
     )
-    assert "DIFF-BASE" in reason
-    assert "by fewer than 10 patients" in reason
+    assert "cannot be released safely" in reason
 
     audit_records = [
         json.loads(line)
@@ -92,7 +91,7 @@ def test_small_population_difference_is_withheld_and_audited(tmp_path):
         event for event in audit_records
         if event["event"] == "differencing_withheld"
     )
-    assert withheld_event["details"] == {"earlier_request": "DIFF-BASE"}
+    assert withheld_event["details"]["earlier_request"] == "DIFF-BASE"
     assert "patient_id" not in json.dumps(withheld_event)
 
 
@@ -110,7 +109,7 @@ def test_difference_of_ten_or_more_is_not_withheld():
     assert response["answer"] is not None
 
 
-def test_different_applicants_are_not_compared():
+def test_other_applicants_results_count_as_released():
     process_request(_request("DIFF-OTHER-BASE"))
     response = process_request(_request(
         "DIFF-OTHER-SMALL",
@@ -121,8 +120,8 @@ def test_different_applicants_are_not_compared():
         },
     ))
 
-    assert not response.get("withheld")
-    assert response["answer"] is not None
+    assert response.get("withheld") is True
+    assert response["answer"] is None
 
 
 def test_identical_rerun_is_allowed():
@@ -133,7 +132,7 @@ def test_identical_rerun_is_allowed():
     assert response["answer"] is not None
 
 
-def test_missing_applicant_skips_differencing_history():
+def test_missing_applicant_is_still_protected():
     process_request(_request("DIFF-NO-APPLICANT-1", applicant={}))
     response = process_request(_request(
         "DIFF-NO-APPLICANT-2",
@@ -141,5 +140,5 @@ def test_missing_applicant_skips_differencing_history():
         applicant={},
     ))
 
-    assert not response.get("withheld")
-    assert response["answer"] is not None
+    assert response.get("withheld") is True
+    assert response["answer"] is None

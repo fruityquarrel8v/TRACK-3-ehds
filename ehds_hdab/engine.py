@@ -300,7 +300,7 @@ def execute(plan, data):
                     metric.get("population", []), plan, data, all_ids, concept_cache
                 ).intersection(group_ids)
                 value = len(ids)
-                metrics[metric["id"]] = {"type": kind, "value": value, "n": value}
+                metrics[metric["id"]] = {"type": kind, "value": value, "n": value, "ids": ids}
             elif kind == "count_encounters":
                 value = encounter_group_values.get(metric["id"], {}).get(tuple(path), 0)
                 metrics[metric["id"]] = {"type": kind, "value": value, "n": value}
@@ -313,7 +313,8 @@ def execute(plan, data):
                 ).intersection(group_ids)
                 n, d = len(numerator), len(denominator)
                 value = Decimal(n) * Decimal(100) / Decimal(d) if d else None
-                metrics[metric["id"]] = {"type": kind, "value": value, "numerator": n, "denominator": d}
+                metrics[metric["id"]] = {"type": kind, "value": value, "numerator": n, "denominator": d,
+                                         "numerator_ids": numerator, "denominator_ids": denominator}
             elif kind == "mean":
                 value, count = mean_group_values.get(metric["id"], {}).get(tuple(path), (None, 0))
                 metrics[metric["id"]] = {"type": kind, "value": value, "n": count}

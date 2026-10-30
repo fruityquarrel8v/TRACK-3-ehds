@@ -4,18 +4,16 @@ import time
 from .audit import audit_event
 from .data import load_data
 from .decision import decide
-from .engine import execute, population_patient_ids
+from .engine import execute
+from . import disclosure
 from .parser import parse_request
 from .plan import QueryPlan
 from .privacy import apply_small_cell, check_statistical_output
 from .spe import create_workspace
 
 
-_QUERY_HISTORY = {}
-
-
 def reset_query_history():
-    _QUERY_HISTORY.clear()
+    disclosure.reset_ledger()
 
 
 def _applicant_key(request):
@@ -98,28 +96,7 @@ def process_request(request):
         if not decision.purpose_category:
             warnings.append("Purpose was not matched to a specific Art. 53 category.")
         withheld = False
-        if decision.decision == "APPROVE_STATISTICAL" and plan.cohort:
-            applicant_key = _applicant_key(request)
-            if applicant_key is not None:
-                cohort_ids = frozenset(population_patient_ids(plan.cohort, plan, data))
-                history = _QUERY_HISTORY.setdefault(applicant_key, [])
-                for earlier_request, earlier_ids in history:
-                    difference = len(cohort_ids.symmetric_difference(earlier_ids))
-                    if 0 < difference < 10:
-                        withheld = True
-                        warnings.append(
-                            f"Results withheld: this population differs from your earlier "
-                            f"request {earlier_request} by fewer than 10 patients, which "
-                            "could reveal individuals by subtraction (differencing). "
-                            "Staff review required."
-                        )
-                        audit_event(
-                            "differencing_withheld",
-                            request.get("id"),
-                            {"earlier_request": earlier_request},
-                        )
-                        break
-                history.append((request.get("id"), cohort_ids))
+        withheld_info = None
         if decision.decision == "APPROVE_SPE":
             spe_info = create_workspace(
                 request.get("id", "unknown"),
@@ -131,14 +108,25 @@ def process_request(request):
             answer = {"cohort_size": spe_info["cohort_size"]}
             privacy_check = None
         else:
-            if withheld:
+            raw = execute(plan, data)
+            answer = apply_small_cell(raw)
+            applicant_key = _applicant_key(request)
+            assessment = disclosure.assess(request.get("id"), applicant_key, raw, plan)
+            if not assessment["safe"]:
+                withheld = True
+                withheld_info = assessment
+                disclosure.record(request.get("id"), applicant_key, raw, answer, plan, "withheld")
                 answer = None
                 privacy_check = {"passed": True, "violations": []}
+                first = assessment["conflicts"][0]
+                warnings.append("Results withheld: " + assessment["explanation"])
+                audit_event("differencing_withheld", request.get("id"), {
+                    "earlier_request": first["earlier_request"], "relation": first["relation"],
+                    "cell": first["cell"], "metric": first["metric"]})
             else:
-                raw = execute(plan, data)
-                answer = apply_small_cell(raw)
                 violations = check_statistical_output(answer)
                 privacy_check = {"passed": not violations, "violations": violations}
+                disclosure.record(request.get("id"), applicant_key, raw, answer, plan, "released")
             if plan.patient_level_listing:
                 warnings.append("Patient-level listings are not provided in statistical answers.")
             spe_info = None
@@ -159,7 +147,9 @@ def process_request(request):
         "needs_staff_review": needs_staff_review,
         "processing_time_s": time.perf_counter() - started,
         **({"privacy_check": privacy_check} if privacy_check is not None else {}),
-        **({"withheld": True} if withheld else {}),
+        **({"withheld": True, "withheld_reason": withheld_info["explanation"],
+            "safe_alternatives": withheld_info["alternatives"],
+            "conflicts": withheld_info["conflicts"]} if withheld else {}),
     }
     audit_event(
         "request_processed",
