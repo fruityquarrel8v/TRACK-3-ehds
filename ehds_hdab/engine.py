@@ -17,6 +17,19 @@ def _concept_patients(key, plan, data):
     patients = data["patients"]
     spec = plan.concepts.get(key, {})
     kind = spec.get("kind")
+    if kind == "group":
+        all_ids = set(patients["patient_id"])
+        match = spec.get("match")
+        selected = set(all_ids) if match == "all" else set()
+        for item in spec.get("items", []):
+            matching = _concept_patients(item.get("concept"), plan, data)
+            if item.get("negate"):
+                matching = all_ids - matching
+            if match == "any":
+                selected.update(matching)
+            else:
+                selected.intersection_update(matching)
+        return selected
     if kind == "age":
         ages = patients["age"]
         mask = pd.Series(True, index=patients.index)
@@ -48,9 +61,37 @@ def _concept_patients(key, plan, data):
             reference = pd.Timestamp(REFERENCE_DATE)
             mask &= medications["start_date"].le(reference)
             mask &= medications["end_date"].isna() | medications["end_date"].ge(reference)
+        if spec.get("period_start"):
+            mask &= medications["end_date"].isna() | medications["end_date"].ge(
+                pd.Timestamp(spec["period_start"])
+            )
+        if spec.get("period_end"):
+            mask &= medications["start_date"].le(pd.Timestamp(spec["period_end"]))
         return set(medications.loc[mask, "patient_id"])
     if kind == "observation":
-        return set(data["observations"].loc[data["observations"]["loinc"].eq(str(spec.get("loinc", ""))), "patient_id"])
+        observations = data["observations"]
+        mask = observations["loinc"].eq(str(spec.get("loinc", "")))
+        if spec.get("date_start"):
+            mask &= observations["date"].ge(pd.Timestamp(spec["date_start"]))
+        if spec.get("date_end"):
+            mask &= observations["date"].le(pd.Timestamp(spec["date_end"]))
+        matching = observations.loc[mask]
+        operator = spec.get("op")
+        if operator == "present":
+            return set(matching["patient_id"])
+        if operator in {">", ">=", "<", "<="}:
+            latest = matching.sort_values("date").drop_duplicates("patient_id", keep="last")
+            values = latest["value"].map(_to_decimal)
+            threshold = Decimal(str(spec["value"]))
+            comparisons = {
+                ">": lambda value: value is not None and value > threshold,
+                ">=": lambda value: value is not None and value >= threshold,
+                "<": lambda value: value is not None and value < threshold,
+                "<=": lambda value: value is not None and value <= threshold,
+            }
+            selected = values.map(comparisons[operator])
+            return set(latest.loc[selected, "patient_id"])
+        return set(matching["patient_id"])
     if kind == "encounter":
         return set(_encounters_for(spec, data).loc[:, "patient_id"])
     return set()
@@ -100,6 +141,10 @@ def _selected_observations(metric, population, plan, data):
         frame["patient_id"].isin(population)
         & frame["loinc"].eq(str(spec.get("loinc", "")))
     ].copy()
+    if spec.get("date_start"):
+        frame = frame.loc[frame["date"].ge(pd.Timestamp(spec["date_start"]))]
+    if spec.get("date_end"):
+        frame = frame.loc[frame["date"].le(pd.Timestamp(spec["date_end"]))]
     if frame.empty:
         frame["_numeric"] = pd.Series(dtype=object)
         return frame

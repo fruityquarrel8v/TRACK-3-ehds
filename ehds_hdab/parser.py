@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 
+from .criteria import plan_from_criteria
 from .config import REFERENCE_DATE
 from .plan import QueryPlan
 from .terminology import entries, lookup, normalize
@@ -406,6 +407,8 @@ def _sentence_scope(sentences):
 
 
 def parse_request(request):
+    if isinstance(request.get("criteria"), dict):
+        return plan_from_criteria(request["criteria"])
     plan = QueryPlan()
     definitions = _split_definitions(request.get("definitions"))
     question = str(request.get("question", "") or "")

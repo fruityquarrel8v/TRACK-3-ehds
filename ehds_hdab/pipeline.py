@@ -13,16 +13,20 @@ from .spe import create_workspace
 
 def _condition_source_warnings(plan, data):
     referenced = set()
+
+    def collect(items):
+        for item in items or []:
+            key = item.get("concept")
+            spec = plan.concepts.get(key, {})
+            if spec.get("kind") == "condition":
+                referenced.add(key)
+            elif spec.get("kind") == "group":
+                collect(spec.get("items"))
+
     for metric in plan.metrics:
         for field in ("population", "numerator_population", "denominator_population"):
-            for item in metric.get(field) or []:
-                key = item.get("concept")
-                if plan.concepts.get(key, {}).get("kind") == "condition":
-                    referenced.add(key)
-    for item in plan.cohort:
-        key = item.get("concept")
-        if plan.concepts.get(key, {}).get("kind") == "condition":
-            referenced.add(key)
+            collect(metric.get(field))
+    collect(plan.cohort)
 
     condition_data = data.get("conditions")
     conditions = (
