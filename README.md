@@ -29,6 +29,7 @@
 
 <p align="center">
   <a href="#watch-the-2-minute-demo">Demo video</a> ·
+  <a href="#presentations">Presentations</a> ·
   <a href="#why-healthcare-rocket">Why HealthCare Rocket?</a> ·
   <a href="#a-60-second-example">Example</a> ·
   <a href="#screenshots">Screenshots</a> ·
@@ -70,6 +71,13 @@ The video shows three recorded demonstrations on the synthetic dataset:
 | **Demo 1** | **Clinical research** | A researcher asks how many patients have type 2 diabetes. HealthCare Rocket recognises ICD-10 E11, evaluates the research purpose and returns **1,152** eligible patients. |
 | **Demo 2** | **Interactive statistics** | The researcher investigates **newly recorded** type 2 diabetes diagnoses from 2023 to 2025: **2023: 36 · 2024: 35 · 2025: 34** (first recorded diagnoses within each year — not cumulative prevalence). The application displays the results as interactive statistical visualisations. |
 | **Demo 3** | **Prohibited insurance purpose** | A health insurance company requests diabetes statistics to increase insurance premiums. The application rejects the request under EHDS **Article 54** without releasing any statistics. |
+
+## Presentations
+
+| File | Role |
+|---|---|
+| [**HealthCare_Rocket_One_Minute_Pitch.pdf**](docs/HealthCare_Rocket_One_Minute_Pitch.pdf) | Official single-slide presentation for the live-pitch round (one minute). |
+| [**HealthCare_Rocket_Pitch_Deck.pdf**](docs/HealthCare_Rocket_Pitch_Deck.pdf) | Full pitch deck — supplementary technical and clinical documentation (10 slides). |
 
 ## Why HealthCare Rocket?
 
@@ -244,6 +252,7 @@ tests/                 213 tests, incl. new requests in tests/new_requests/ and 
 evaluate.py            official metric evaluation
 assets/                AIM logo files
 docs/screenshots/      the screenshots used in this README
+docs/*.pdf             one-minute pitch slide and full pitch deck (see Presentations)
 .streamlit/config.toml Streamlit theme
 .env.example           optional environment variables (documented placeholders only)
 COMPLIANCE_AUDIT.md    an earlier self-audit of the authorization and privacy controls
