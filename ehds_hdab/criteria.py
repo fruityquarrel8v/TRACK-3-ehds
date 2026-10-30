@@ -490,7 +490,10 @@ def _describe_item(item, negated=False):
             excluded=excluded and item.get("type") == "medication",
         )
     if (negated or item.get("exclude")) and item.get("type") != "medication":
-        return f"without {description}"
+        for prefix, replacement in (("with ", "without "), ("who are ", "who are not "), ("who meet ", "who do not meet ")):
+            if description.startswith(prefix):
+                return replacement + description[len(prefix):]
+        return f"not {description}"
     return description
 
 

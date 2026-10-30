@@ -590,3 +590,18 @@ def test_describe_lab_without_unit_and_hospital_stay_without_diagnosis():
     assert "30 %" not in description
     assert "with an inpatient stay in 2025" in description
     assert "for Any main diagnosis" not in description
+
+
+def test_excluded_descriptions_read_naturally():
+    from ehds_hdab.criteria import describe_criteria
+
+    text = describe_criteria({"population": {"match": "all", "items": [
+        {"type": "condition", "label": "Type 2 diabetes", "icd10": ["E11"]},
+        {"type": "condition", "label": "Breast cancer", "icd10": ["C50"], "exclude": True},
+        {"type": "sex", "label": "female", "value": "female", "exclude": True},
+        {"type": "age", "min": 65, "exclude": True},
+    ]}})
+    assert "without Breast cancer (ICD-10 C50)" in text
+    assert "without with" not in text
+    assert "who are not female" in text
+    assert "not aged 65 or older" in text
