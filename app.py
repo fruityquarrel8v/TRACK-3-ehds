@@ -969,6 +969,40 @@ def _pending_clarifications(draft):
     ]
 
 
+def _pending_questions(draft):
+    answered = draft.setdefault("clarified", {})
+    return [q for q in draft.get("clarifications", []) if q.get("id") not in answered]
+
+
+def _recheck(draft):
+    """Re-evaluate whether the (possibly corrected) criteria can be submitted."""
+    from ehds_hdab.nl import Interpretation
+    draft["ok"] = Interpretation(draft["criteria"], [], [], list(draft.get("problems", [])), []).ok()
+
+
+def _apply_clarification(draft, question, action):
+    items = draft["criteria"]["population"]["items"]
+    if action.get("stop"):
+        return "stop"
+    if action.get("add"):
+        items.append(dict(action["add"]))
+    label = action.get("replace_condition_with_stay")
+    if label:
+        for index, item in enumerate(list(items)):
+            if item.get("type") == "condition" and item.get("label") == label:
+                stay = {"type": "hospital_stay", "label": label, "icd10": list(item.get("icd10", []))}
+                if item.get("onset_start"):
+                    stay["period_start"] = item["onset_start"]
+                if item.get("onset_end"):
+                    stay["period_end"] = item["onset_end"]
+                    # "had X in 2025" carries only an end date; a stay "in 2025" means that calendar year.
+                    stay.setdefault("period_start", f"{str(item['onset_end'])[:4]}-01-01")
+                items[index] = stay
+                break
+    draft["clarified"][question["id"]] = action
+    return "ok"
+
+
 def _screen_welcome(examples):
     st.markdown('<div class="hero"><h1>What would you like to research?</h1>'
                 "<p>Describe your research question in your own words. We'll help you turn it into a "
@@ -988,6 +1022,8 @@ def _screen_welcome(examples):
                 "question": question, "criteria": interpretation.criteria,
                 "assumptions": list(interpretation.assumptions),
                 "unrecognised": list(interpretation.unrecognised),
+                "problems": list(interpretation.problems),
+                "clarifications": list(interpretation.clarifications),
                 "ok": interpretation.ok(), "source": "question", "clarified": {},
             }
             _go("understand")
@@ -1029,15 +1065,21 @@ def _screen_understand():
                    + ", ".join(f"\u201c{w}\u201d" for w in draft["unrecognised"])
                    + ". They were not used. The data covers 15 diagnoses, 17 medication groups and 4 laboratory "
                      "tests; use *Edit details* to choose from them.")
-    if not draft.get("ok"):
+    for problem in draft.get("problems", []):
+        st.error(problem)
+    questions = _pending_questions(draft)
+    if questions and not draft.get("problems"):
+        st.info("One detail needs clarification before I can prepare the request: " + questions[0]["question"])
+    elif not draft.get("ok") and not draft.get("problems"):
         st.error("I could not find a condition, medication, measurement or patient group in your question that the "
                  "data supports. Rephrase it or build the request step by step.")
     st.caption("Interpretation is rule-based (no AI model) and uses the clinical definitions documented for this "
                "prototype. Patient data never leaves this computer.")
     c1, c2, c3 = st.columns([1.3, 1, 1])
-    if draft.get("ok") and c1.button("Looks good — Continue", type="primary", key="understand_continue",
-                                     width="stretch"):
-        _go("clarify" if _pending_clarifications(draft) else "review")
+    can_continue = not draft.get("problems") and (draft.get("ok") or bool(questions))
+    if can_continue and c1.button("Looks good — Continue" if draft.get("ok") else "Answer the question",
+                                  type="primary", key="understand_continue", width="stretch"):
+        _go("clarify" if (_pending_clarifications(draft) or questions) else "review")
     if c2.button("Edit details", key="understand_edit", width="stretch"):
         _prefill_builder(criteria, {}, "", list(REQUEST_TYPES)[0])
         st.session_state["guided_step"] = 2
@@ -1050,10 +1092,20 @@ def _screen_understand():
 def _screen_clarify():
     draft = _draft()
     pending = _pending_clarifications(draft)
-    st.markdown("### One quick question")
-    if not pending:
-        _go("review")
+    questions = _pending_questions(draft)
+    st.markdown("### One quick question" if len(pending) + len(questions) == 1 else "### A few quick questions")
+    if not pending and not questions:
+        _recheck(draft)
+        _go("review" if draft.get("ok") else "understand")
         return
+    answers = {}
+    for question in questions:
+        st.markdown(f"**{question['question']}**")
+        labels = [label for label, _ in question["options"]]
+        answers[question["id"]] = st.radio(question["id"], labels, key=f"clarify_{question['id']}",
+                                           label_visibility="collapsed")
+        if question.get("note"):
+            st.caption(question["note"])
     choices = {}
     for item in pending:
         label = item.get("label")
@@ -1066,6 +1118,13 @@ def _screen_clarify():
                    "treatments that have stopped.")
     c1, c2 = st.columns([1, 1])
     if c1.button("Continue", type="primary", key="clarify_continue", width="stretch"):
+        for question in questions:
+            action = dict(question["options"])[answers[question["id"]]]
+            if _apply_clarification(draft, question, action) == "stop":
+                st.session_state["pending_question"] = draft.get("question", "")
+                _go("welcome")
+                return
+        _recheck(draft)
         leaves, _ = _criterion_leaves(draft["criteria"]["population"]["items"])
         for item in leaves:
             if item.get("type") == "medication" and item.get("label") in choices:
@@ -1073,7 +1132,7 @@ def _screen_clarify():
                 item["status"] = status
                 draft["clarified"][item["label"]] = status
         draft["assumptions"] = [a for a in draft["assumptions"] if not a.startswith("Medication status for")]
-        _go("review")
+        _go("review" if draft.get("ok") else "understand")
     if c2.button("Back", key="clarify_back", width="stretch"):
         _go("understand")
 

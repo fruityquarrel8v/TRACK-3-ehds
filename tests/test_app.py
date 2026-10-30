@@ -216,3 +216,58 @@ def test_demo_scenarios_show_differencing_protection():
     at.button(key="demo_run_4").click()
     at.run()
     assert any("REJECT" in e.value for e in at.error)
+
+
+def test_incomplete_question_is_clarified_and_submitted():
+    at = _app()
+    at.text_area(key="research_question").set_value("Show me diabetes statistics.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "understand"
+    assert any("type 2 diabetes" in i.value.casefold() for i in at.info)
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "clarify"
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    items = at.session_state["draft"]["criteria"]["population"]["items"]
+    assert any(item.get("icd10") == ["E11"] for item in items)
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    assert not at.exception
+    assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
+
+
+def test_hospitalisation_clarification_switches_to_inpatient_stays():
+    at = _app()
+    at.text_area(key="research_question").set_value("How many patients with heart failure were hospitalized in 2025?")
+    at.button(key="welcome_continue").click()
+    at.run()
+    at.button(key="understand_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "clarify"
+    radio = at.radio(key="clarify_hospitalisation")
+    radio.set_value(radio.options[0])
+    at.run()
+    at.button(key="clarify_continue").click()
+    at.run()
+    assert at.session_state["stage"] == "review"
+    items = at.session_state["draft"]["criteria"]["population"]["items"]
+    stay = next(item for item in items if item["type"] == "hospital_stay")
+    assert stay["icd10"] == ["I50"]
+    _fill_review(at)
+    at.button(key="review_submit").click()
+    at.run()
+    table = at.dataframe[0].value.astype(str).to_numpy().ravel().tolist()
+    assert "103" in table
+
+
+def test_unsupported_question_cannot_continue():
+    at = _app()
+    at.text_area(key="research_question").set_value("Compare genetic variants associated with heart failure.")
+    at.button(key="welcome_continue").click()
+    at.run()
+    assert any("genetic" in e.value for e in at.error)
+    assert not any(button.key == "understand_continue" for button in at.button)

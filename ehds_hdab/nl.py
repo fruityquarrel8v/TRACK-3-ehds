@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from .data import load_data
@@ -62,8 +62,12 @@ class Interpretation:
     criteria: dict
     assumptions: list[str]
     unrecognised: list[str]
+    problems: list[str] = field(default_factory=list)
+    clarifications: list[dict] = field(default_factory=list)
 
     def ok(self) -> bool:
+        if self.problems:
+            return False
         population = self.criteria.get("population", {})
 
         def has_supported_leaf(items):
@@ -444,6 +448,89 @@ def _unrecognised_tokens(text, spans):
     return values
 
 
+_UNSUPPORTED_TOPICS = {
+    "genetic": "genetic or genomic data", "genetics": "genetic or genomic data", "genome": "genetic or genomic data",
+    "genomic": "genetic or genomic data", "variant": "genetic or genomic data", "variants": "genetic or genomic data",
+    "dna": "genetic or genomic data", "mutation": "genetic or genomic data", "mutations": "genetic or genomic data",
+    "imaging": "imaging", "mri": "imaging", "ct": "imaging", "x-ray": "imaging", "radiology": "imaging",
+    "mortality": "deaths or survival", "death": "deaths or survival", "deaths": "deaths or survival",
+    "died": "deaths or survival", "survival": "deaths or survival",
+    "smoking": "smoking status or lifestyle data", "smokers": "smoking status or lifestyle data",
+    "alcohol": "lifestyle data", "income": "socio-economic data", "ethnicity": "ethnicity",
+    "cost": "costs", "costs": "costs", "readmission": "readmissions", "readmissions": "readmissions",
+    "notes": "free-text clinical notes", "pathology": "pathology reports", "biopsy": "pathology reports",
+}
+_INJECTION = re.compile(
+    r"\b(?:ignore (?:all |the )?(?:previous|prior|above) instructions|treat this (?:request )?as (?:automatically )?approved|"
+    r"disable (?:the )?privacy|reveal all patient|bypass|override (?:the )?(?:authori[sz]ation|rules)|"
+    r"system prompt|you are now)\b", re.I)
+_GENERIC_DIABETES = re.compile(r"\bdiabet(?:es|ic|ics)\b", re.I)
+_HOSPITAL_WORD = re.compile(r"\b(?:hospitali[sz]ed|hospitali[sz]ations?|admitted|admissions?)\b", re.I)
+
+
+def _leaves(items):
+    for item in items or []:
+        if isinstance(item, dict) and "items" in item:
+            yield from _leaves(item["items"])
+        elif isinstance(item, dict):
+            yield item
+
+
+def _review_interpretation(text, criteria, unrecognised, assumptions):
+    """Blocking problems (unsupported topics, contradictions) and clarification questions."""
+    problems, clarifications = [], []
+    leaves = list(_leaves(criteria.get("population", {}).get("items", [])))
+    lowered = text.casefold()
+    topics = sorted({_UNSUPPORTED_TOPICS[w] for w in re.findall(r"[a-z\-]+", lowered) if w in _UNSUPPORTED_TOPICS})
+    for topic in topics:
+        problems.append(f"The dataset contains no {topic}. It covers diagnoses (ICD-10), medications (ATC), "
+                        "four laboratory tests (HbA1c, BMI, systolic blood pressure, eGFR), hospital encounters, "
+                        "age, sex and region. Ask a question using those variables instead.")
+    if _GENERIC_DIABETES.search(lowered) and not any(
+            item.get("type") == "condition" and "E11" in item.get("icd10", []) for item in leaves):
+        clarifications.append({
+            "id": "diabetes_type",
+            "question": "Which diabetes diagnoses do you mean? This dataset documents only type 2 diabetes (ICD-10 E11); "
+                        "type 1 and other forms are not coded in it.",
+            "options": [
+                ("Type 2 diabetes (ICD-10 E11)", {"add": {"type": "condition", "label": "Type 2 diabetes", "icd10": ["E11"]}}),
+                ("A different condition — let me rephrase", {"stop": True}),
+            ],
+        })
+        unrecognised[:] = [w for w in unrecognised if not _GENERIC_DIABETES.search(w)]
+    for item in leaves:
+        if item.get("type") == "age" and item.get("min") is not None and item.get("max") is not None \
+                and item["min"] > item["max"]:
+            problems.append(f"The age range is contradictory (older than {item['min'] - 1} and younger than "
+                            f"{item['max'] + 1} at the same time). Please correct it.")
+        for start_key, end_key in (("period_start", "period_end"), ("onset_start", "onset_end")):
+            if item.get(start_key) and item.get(end_key) and item[start_key] > item[end_key]:
+                problems.append("The time period ends before it starts. Please correct it.")
+    conditions = [item for item in leaves if item.get("type") == "condition" and not item.get("exclude")]
+    if _HOSPITAL_WORD.search(lowered) and conditions and not any(
+            item.get("type") == "hospital_stay" for item in leaves):
+        condition = conditions[0]
+        period = {}
+        for key in ("onset_start", "onset_end"):
+            pass
+        clarifications.append({
+            "id": "hospitalisation",
+            "question": f"Hospitalised and {condition['label']}: which patients do you mean?",
+            "options": [
+                (f"Patients admitted because of {condition['label']} (inpatient stay with it as the main diagnosis)",
+                 {"replace_condition_with_stay": condition["label"]}),
+                (f"Patients with {condition['label']} who had any inpatient stay",
+                 {"add": {"type": "hospital_stay", "label": "Any main diagnosis", "icd10": []}}),
+            ],
+            "note": "Counts are unique patients; the number of stays is not available in this flow.",
+        })
+    if _INJECTION.search(text):
+        assumptions.append("Instructions contained in the question (e.g. to ignore rules or approve automatically) "
+                           "were ignored: the question is treated as data, never as a command.")
+        unrecognised[:] = []
+    return problems, clarifications
+
+
 def interpret_question(text: str) -> Interpretation:
     text = str(text or "")
     periods = _periods(text)
@@ -636,7 +723,9 @@ def interpret_question(text: str) -> Interpretation:
     for period_start, period_end, _ in periods:
         recognised_spans.append((period_start, period_end))
     unrecognised = _unrecognised_tokens(text, recognised_spans)
-    return Interpretation(
+    problems, clarifications = _review_interpretation(text, criteria, unrecognised, assumptions)
+    return Interpretation(problems=problems, clarifications=clarifications,
+        
         criteria=criteria,
         assumptions=list(dict.fromkeys(assumptions)),
         unrecognised=unrecognised,
