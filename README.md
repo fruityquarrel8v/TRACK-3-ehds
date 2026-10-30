@@ -6,6 +6,13 @@
 
 > "An AI system that knows when to answer, when to ask, and when to say no."
 
+## Presentation
+
+- [HealthCare Rocket 🚀 pitch deck](docs/HealthCare_Rocket_Pitch_Deck.pdf) (10 slides, PDF) · [editable PPTX](docs/HealthCare_Rocket_Pitch_Deck.pptx)
+- [One-minute pitch](docs/HealthCare_Rocket_One_Minute_Pitch.pdf) (single slide, PDF) · [editable PPTX](docs/HealthCare_Rocket_One_Minute_Pitch.pptx)
+
+The decks reflect the measured results below (`python evaluate.py`, `python -m pytest`) and label what is working, what is simulated (HDAB decisions, SPE) and what is future work.
+
 ## The problem
 
 Researchers need health data, but every request mixes clinical ambiguity ("patients on metformin" – current or ever?), legal limits (EHDS Art. 53/54: research yes, insurance pricing no) and privacy risk. A Health Data Access Body (HDAB) has to decide, compute and protect – quickly and consistently.
