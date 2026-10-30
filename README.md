@@ -76,8 +76,8 @@ The video shows three recorded demonstrations on the synthetic dataset:
 
 | File | Role |
 |---|---|
-| [**HealthCare_Rocket_One_Minute_Pitch.pdf**](docs/HealthCare_Rocket_One_Minute_Pitch.pdf) | Official single-slide presentation for the live-pitch round (one minute). |
-| [**HealthCare_Rocket_Pitch_Deck.pdf**](docs/HealthCare_Rocket_Pitch_Deck.pdf) | Full pitch deck — supplementary technical and clinical documentation (10 slides). |
+| [**HealthCare_Rocket_One_Minute_Pitch.pdf**](docs/HealthCare_Rocket_One_Minute_Pitch.pdf) · [PPTX](docs/HealthCare_Rocket_One_Minute_Pitch.pptx) | Official single-slide presentation for the live-pitch round (one minute). |
+| [**HealthCare_Rocket_Pitch_Deck.pdf**](docs/HealthCare_Rocket_Pitch_Deck.pdf) · [PPTX](docs/HealthCare_Rocket_Pitch_Deck.pptx) | Full pitch deck — supplementary technical and clinical documentation (10 slides). |
 
 ## Why HealthCare Rocket?
 
