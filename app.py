@@ -22,6 +22,7 @@ from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
 from ehds_hdab import disclosure
 from ehds_hdab.viz import answer_table, interpret_chart_command, methodology_text, render_chart
 from ehds_hdab.terminology import display_name, entries
+from ehds_hdab.theme import css_variables
 
 ROOT = Path(__file__).resolve().parent
 REQUESTS_DIR = ROOT / "requests"
@@ -37,9 +38,9 @@ ARTICLES = {
     "73": "Secure processing environment",
 }
 DECISION_STYLE = {
-    "REJECT": ("error", "Rejected"),
-    "APPROVE_STATISTICAL": ("success", "Approved: anonymised statistics"),
-    "APPROVE_SPE": ("info", "Approved: pseudonymised data in a secure processing environment"),
+    "REJECT": ("error", "Request rejected"),
+    "APPROVE_STATISTICAL": ("success", "Approved for statistics"),
+    "APPROVE_SPE": ("info", "Approved for the secure processing environment"),
 }
 PROTOTYPE_DISCLAIMER = (
     "Prototype: decisions are generated automatically for demonstration and are not legally binding "
@@ -103,7 +104,7 @@ def show_articles(articles):
 def show_response(resp, staff=False):
     kind, title = DECISION_STYLE.get(resp["decision"], ("warning", resp["decision"]))
     if resp.get("withheld"):
-        kind, title = "warning", "Approved request, result withheld by the disclosure check"
+        kind, title = "warning", "Review required: result withheld by the disclosure check"
     getattr(st, kind)(f"**{title}** (`{resp['decision']}`)")
     st.markdown(f"**Reason:** {resp['reason']}")
     st.markdown("**Legal basis:**")
@@ -1012,82 +1013,113 @@ DECISION_EXPLANATIONS = {
                    "researchers analyse pseudonymised records on site. Nothing can be downloaded; only aggregated "
                    "results leave after review.",
 }
-STYLE = """
-<style>
-:root {--navy: #0E2554; --ink: #22305A; --muted: #5C6690; --blue: #2F56D8; --blue-dark: #2446B3;
-       --tint: #F1EFFC; --tint-2: #F7F6FE; --line: #DDD9F3; --green: #1E8E5A; --green-tint: #E8F7EF;
-       --lavender: #9A8CF2; --coral: #FF7A6B;}
-.block-container {max-width: 1120px; padding-top: 3.4rem;}
-h1, h2, h3, h4 {color: var(--navy) !important; letter-spacing: -.01em;}
-.hdn-header {display: flex; align-items: center; justify-content: space-between; padding: .2rem 0 1rem 0;
-             border-bottom: 1px solid var(--line); margin-bottom: 1.4rem;}
-.hdn-brand {display: flex; align-items: center; gap: .9rem;}
-.hdn-brand .t {font-size: 1.55rem; font-weight: 800; color: var(--navy); line-height: 1.1;}
-.hdn-brand img {height: 56px; width: auto;}
-.hdn-brand .s {font-size: .9rem; color: var(--muted); margin-top: .15rem;}
+STYLE = "<style>" + css_variables() + """
+.stApp {background: var(--bg);}
+.block-container {max-width: 1120px; padding-top: 3rem;}
+h1, h2, h3, h4 {color: var(--text) !important; letter-spacing: -.01em;}
+p, li, label, .stMarkdown {color: var(--text);}
+.hdn-header {display: flex; align-items: center; justify-content: space-between; padding: .1rem 0 .9rem 0;
+             border-bottom: 1px solid var(--border); margin-bottom: 1.4rem;}
+.hdn-brand {display: flex; align-items: center; gap: .8rem;}
+.hdn-brand .t {font-size: 1.35rem; font-weight: 800; color: var(--text); line-height: 1.1;}
+.hdn-brand img {height: 40px; width: auto;}
+.hdn-brand .s {font-size: .85rem; color: var(--muted); margin-top: .15rem;}
 .hdn-eu {display: flex; align-items: center; gap: .6rem; font-size: .68rem; font-weight: 700; letter-spacing: .06em;
-         color: #1E3A8A; text-transform: uppercase; line-height: 1.25;}
-.eyebrow {font-size: .74rem; font-weight: 700; letter-spacing: .16em; color: #5B6680; text-transform: uppercase;
+         color: var(--info); text-transform: uppercase; line-height: 1.25;}
+.eyebrow {font-size: .74rem; font-weight: 700; letter-spacing: .16em; color: var(--primary); text-transform: uppercase;
           margin: .2rem 0 .3rem 0;}
-.hero h1 {font-size: 2.35rem; font-weight: 800; color: var(--navy); margin: 0 0 .5rem 0; line-height: 1.15;}
+.hero h1 {font-size: 2.35rem; font-weight: 800; color: var(--text); margin: 0 0 .5rem 0; line-height: 1.15;}
 .hero p {color: var(--muted); font-size: 1.05rem; margin: 0 0 1rem 0; max-width: 640px;}
-.screen-title {font-size: 1.7rem; font-weight: 800; color: var(--navy); margin: 0 0 .3rem 0;}
+.screen-title {font-size: 1.7rem; font-weight: 800; color: var(--text); margin: 0 0 .3rem 0;}
 .screen-sub {color: var(--muted); margin: 0 0 1rem 0;}
-div[data-testid="stTextArea"] textarea {border-radius: 12px; border: 1px solid var(--line); font-size: 1.05rem;
-                                         padding: 1rem; background: #fff;}
-div.stButton > button, div.stDownloadButton > button {border-radius: 10px; padding: .55rem 1.15rem; font-weight: 600;
-                                                       border: 1px solid var(--line); color: var(--navy);}
-div.stButton > button[kind="primary"] {background: var(--blue); border-color: var(--blue); color: #fff;}
-div.stButton > button[kind="primary"]:hover {background: var(--blue-dark); border-color: var(--blue-dark);}
-.card {background: #FFFFFF; border: 1px solid var(--line); border-radius: 16px; padding: 1.2rem 1.3rem;
-       box-shadow: 0 4px 18px rgba(27, 42, 78, .06); margin-bottom: 1rem;}
+div[data-testid="stTextArea"] textarea, div[data-testid="stTextInput"] input {border-radius: 14px; font-size: 1.02rem;
+        background: var(--surface); color: var(--text);}
+div[data-testid="stTextArea"] textarea {padding: 1rem; border: 1px solid var(--border);
+        box-shadow: 0 6px 24px rgba(196, 71, 121, .06);}
+div[data-testid="stTextArea"] textarea:focus, div[data-testid="stTextInput"] input:focus {border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(108, 132, 201, .35);}
+div.stButton > button, div.stDownloadButton > button {border-radius: 12px; padding: .55rem 1.15rem; font-weight: 600;
+        border: 1px solid var(--border); color: var(--text); background: var(--surface); transition: background .15s, border-color .15s;}
+div.stButton > button:hover, div.stDownloadButton > button:hover {background: var(--lavender-tint); border-color: var(--secondary);
+        color: var(--text);}
+div.stButton > button:active {background: #E6DDFB;}
+.st-key-example_chips div.stButton > button {background: var(--lavender-tint); border-color: #E3DBFA; border-radius: 999px;
+        font-weight: 600; color: var(--text);}
+.st-key-example_chips div.stButton > button:hover {background: var(--pink-tint); border-color: var(--brand);}
+div.stButton > button:disabled {color: var(--muted); background: #F6F1F4; border-color: var(--border);}
+div.stButton > button[kind="primary"] {background: var(--primary); border-color: var(--primary); color: #fff;}
+div.stButton > button[kind="primary"]:hover {background: var(--primary-hover); border-color: var(--primary-hover); color: #fff;}
+div.stButton > button[kind="primary"]:active {background: var(--primary-active); border-color: var(--primary-active);}
+div.stButton > button:focus-visible, div.stDownloadButton > button:focus-visible,
+div[data-testid="stButtonGroup"] button:focus-visible {outline: 3px solid var(--focus); outline-offset: 2px; box-shadow: none;}
+div[data-testid="stButtonGroup"] button {border-radius: 10px; color: var(--text); font-weight: 600; padding: .3rem .9rem;
+        border: 1px solid var(--border); background: var(--surface);}
+div[data-testid="stButtonGroup"] button:hover {background: var(--lavender-tint); color: var(--text);}
+div[data-testid="stButtonGroup"] button[aria-checked="true"], div[data-testid="stButtonGroup"] button[data-testid$="Active"]
+        {background: var(--pink-tint); color: var(--primary); border-color: var(--primary); font-weight: 700;}
+.card {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 1.2rem 1.3rem;
+       box-shadow: 0 6px 22px rgba(24, 35, 66, .05); margin-bottom: 1rem;}
 .card .head {display: flex; align-items: center; gap: .7rem; margin-bottom: .25rem;}
-.card .head .chk {width: 30px; height: 30px; border-radius: 50%; background: var(--green-tint); color: var(--green);
+.card .head .chk {width: 30px; height: 30px; border-radius: 50%; background: var(--success-tint); color: var(--success);
                   display: inline-flex; align-items: center; justify-content: center; flex: none;}
-.card h3 {margin: 0; font-size: 1.25rem; color: var(--navy); font-weight: 800;}
+.card h3 {margin: 0; font-size: 1.25rem; color: var(--text); font-weight: 800;}
 .card .lead {color: var(--muted); font-size: .92rem; margin: 0 0 .9rem 0;}
-.card .row {display: flex; align-items: center; gap: .9rem; background: var(--tint); border-radius: 12px;
+.card .row {display: flex; align-items: center; gap: .9rem; background: var(--lavender-tint); border-radius: 14px;
             padding: .7rem .9rem; margin-bottom: .5rem; border: 1px solid transparent;}
-.card .row .ic {width: 34px; height: 34px; border-radius: 9px; background: #fff; color: var(--blue); flex: none;
-                display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(27,42,78,.08);}
+.card .row .ic {width: 34px; height: 34px; border-radius: 10px; background: var(--surface); color: var(--primary); flex: none;
+                display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(24,35,66,.08);}
 .card .row .k {color: var(--muted); font-size: .8rem; margin-bottom: .1rem;}
-.card .row .v {color: var(--navy); font-weight: 700; font-size: 1rem;}
-.card .row .d {display: block; color: #6F7A94; font-size: .8rem; font-weight: 400; margin-top: .1rem;}
-.banner-ok {display: flex; align-items: center; gap: .8rem; background: var(--green-tint); border-radius: 12px;
+.card .row .v {color: var(--text); font-weight: 700; font-size: 1rem;}
+.card .row .d {display: block; color: var(--muted); font-size: .8rem; font-weight: 400; margin-top: .1rem;}
+.banner-ok {display: flex; align-items: center; gap: .8rem; background: var(--success-tint); border-radius: 14px;
             padding: .8rem 1rem; margin: .2rem 0 1rem 0; border: 1px solid #CDEBD9;}
-.banner-ok .ic {width: 34px; height: 34px; border-radius: 9px; background: var(--green); color: #fff; flex: none;
+.banner-ok .ic {width: 34px; height: 34px; border-radius: 10px; background: var(--success); color: #fff; flex: none;
                 display: inline-flex; align-items: center; justify-content: center;}
 .banner-ok b {color: #176B45; display: block; font-size: .95rem;}
 .banner-ok span {color: #3F6B55; font-size: .85rem;}
+.result-card {background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--primary);
+              border-radius: 18px; padding: 1rem 1.3rem; margin: .4rem 0 1rem 0; max-width: 360px;
+              box-shadow: 0 6px 22px rgba(24, 35, 66, .05);}
+.result-card .k {color: var(--muted); font-size: .85rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;}
+.result-card .v {color: var(--text); font-size: 2.3rem; font-weight: 800; line-height: 1.1; margin: .2rem 0;}
+.result-card .d {color: var(--muted); font-size: .85rem;}
 .strip {display: flex; gap: 1.2rem; margin: 1.2rem 0 .6rem 0; flex-wrap: wrap;}
 .strip .st {flex: 1 1 200px; min-width: 180px;}
 .strip .num {display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
-             border-radius: 50%; background: var(--tint); color: var(--navy); font-weight: 800; margin-right: .6rem;}
-.strip .num.on {background: linear-gradient(135deg, var(--lavender), var(--blue)); color: #fff;}
-.strip .ti {font-weight: 800; color: var(--navy); margin-top: .6rem; font-size: 1.02rem;}
+             border-radius: 50%; background: var(--lavender-tint); color: var(--text); font-weight: 800; margin-right: .6rem;
+             border: 2px solid transparent;}
+.strip .num.on {background: var(--primary); color: #fff; box-shadow: 0 0 0 4px var(--pink-tint);}
+.strip .num.done {background: var(--success-tint); color: var(--success); border-color: var(--success);}
+.strip .ti {font-weight: 800; color: var(--text); margin-top: .6rem; font-size: 1.02rem;}
+.strip .on-label {color: var(--primary); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+                  margin-left: .4rem;}
 .strip .tx {color: var(--muted); font-size: .9rem; line-height: 1.4;}
-.howbox {background: var(--tint-2); border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.2rem; margin-top: 1rem;}
-.howbox .h {font-weight: 700; color: var(--navy); margin-bottom: .6rem;}
+.strip .icon {color: var(--accent); vertical-align: middle;}
+.howbox {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 1rem 1.2rem; margin-top: 1rem;}
+.howbox .h {font-weight: 700; color: var(--text); margin-bottom: .6rem;}
 .howbox .cols {display: flex; gap: 1.5rem; flex-wrap: wrap;}
 .howbox .col {flex: 1 1 280px;}
-.howbox .col b {display: block; color: var(--navy); margin-bottom: .2rem;}
+.howbox .col b {display: block; color: var(--text); margin-bottom: .2rem;}
 .howbox .col span {color: var(--muted); font-size: .9rem; line-height: 1.45;}
 .steps {display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; color: var(--muted);
         margin: .2rem 0 1.1rem 0; font-size: .92rem;}
-.steps .n {display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--tint);
-           align-items: center; justify-content: center; font-weight: 700; color: var(--navy); margin-right: .35rem;}
-.steps .on .n {background: linear-gradient(135deg, var(--lavender), var(--blue)); color: #fff;}
-.steps .on {color: var(--navy); font-weight: 700;}
-.steps .sep {color: var(--line); margin: 0 .3rem;}
-.quiet {color: #8A93A8; font-size: .82rem;}
-section[data-testid="stSidebar"] {background: var(--tint-2); border-right: 1px solid var(--line);}
-section[data-testid="stSidebar"] div[role="radiogroup"] label {padding: .5rem .8rem; border-radius: 10px;
-        margin-bottom: .15rem; color: var(--navy); font-weight: 600;}
-section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {background: #E6E2FA;}
+.steps .n {display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--lavender-tint);
+           align-items: center; justify-content: center; font-weight: 700; color: var(--text); margin-right: .35rem;}
+.steps .on .n {background: var(--primary); color: #fff;}
+.steps .on {color: var(--text); font-weight: 700;}
+.steps .sep {color: var(--border); margin: 0 .3rem;}
+.quiet {color: var(--muted); font-size: .82rem;}
+section[data-testid="stSidebar"] {background: var(--surface); border-right: 1px solid var(--border);}
+section[data-testid="stSidebar"] div[role="radiogroup"] label {padding: .5rem .8rem; border-radius: 12px;
+        margin-bottom: .15rem; color: var(--text); font-weight: 600;}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {background: var(--pink-tint); color: var(--primary);}
 section[data-testid="stSidebar"] .side-foot {color: var(--muted); font-size: .9rem; margin-top: 2rem;
-        border-top: 3px solid var(--blue); padding-top: .6rem; max-width: 150px;}
-div[data-testid="stAlert"] {border-radius: 12px;}
-div[data-testid="stMetric"] {background: var(--tint); border-radius: 14px; padding: .8rem 1rem;}
+        border-top: 3px solid var(--primary); padding-top: .6rem; max-width: 150px;}
+div[data-testid="stAlert"] {border-radius: 14px;}
+div[data-testid="stMetric"] {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: .8rem 1rem;}
+div[data-testid="stExpander"] {border-radius: 14px; border-color: var(--border); background: var(--surface);}
+div[data-testid="stDataFrame"] {border-radius: 12px; overflow: hidden;}
+div[data-testid="stVegaLiteChart"] {background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: .6rem;}
 </style>
 """
 
@@ -1161,11 +1193,16 @@ FLOW_STEPS = [
 ]
 
 
+CURRENT_STEP_TAG = '<span class="on-label">Current step</span>'
+
+
 def _flow_strip(active=1):
     parts = "".join(
-        f'<div class="st"><span class="num{" on" if i == active else ""}">{i}</span>'
-        f'<span style="color:#2F56D8;vertical-align:middle">{ICONS[icon]}</span>'
-        f'<div class="ti">{_escape(name)}</div><div class="tx">{_escape(text)}</div></div>'
+        f'<div class="st"><span class="num{" on" if i == active else " done" if i < active else ""}" '
+        f'aria-label="Step {i}{" (completed)" if i < active else " (current)" if i == active else ""}">'
+        f'{"&#10003;" if i < active else i}</span><span class="icon">{ICONS[icon]}</span>'
+        f'<div class="ti">{_escape(name)}{CURRENT_STEP_TAG if i == active else ""}</div>'
+        f'<div class="tx">{_escape(text)}</div></div>'
         for i, (name, text, icon) in enumerate(FLOW_STEPS, 1)
     )
     st.markdown(f'<div class="strip">{parts}</div>', unsafe_allow_html=True)
@@ -1330,10 +1367,10 @@ def _screen_welcome(examples):
     if "pending_question" in st.session_state:
         st.session_state["research_question"] = st.session_state.pop("pending_question")
     question = st.text_area("Your research question", key="research_question", height=140,
-                            placeholder="Show HbA1c trends in patients with type 2 diabetes.",
+                            placeholder="Describe your research question, such as comparing HbA1c levels among patients with type 2 diabetes.",
                             label_visibility="collapsed")
     left, _ = st.columns([1, 3])
-    if left.button("Check my request \u2192", type="primary", key="welcome_continue", width="stretch"):
+    if left.button("Continue", type="primary", key="welcome_continue", width="stretch"):
         if not question.strip():
             st.warning("Please describe what you would like to research, or pick an example below.")
         else:
@@ -1349,13 +1386,14 @@ def _screen_welcome(examples):
             _go("understand")
     _flow_strip(active=1)
     st.caption("Try an example:")
-    for col, (label, text) in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
-        if col.button(label, key=f"example_{_slug_key(label)}", width="stretch"):
-            st.session_state["pending_question"] = text
-            _go("welcome")
+    with st.container(key="example_chips"):
+        for col, (label, text) in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
+            if col.button(label, key=f"example_{_slug_key(label)}", width="stretch"):
+                st.session_state["pending_question"] = text
+                _go("welcome")
     st.markdown("")
     st.markdown("**Prefer step-by-step guidance?**")
-    if st.button("Build your request with me", key="start_guided"):
+    if st.button("Build your research request step by step", key="start_guided"):
         st.session_state["guided_step"] = 1
         _go("guided")
     st.markdown(
@@ -1556,7 +1594,9 @@ def _screen_result():
         if not plan.get("group_by"):
             value = next(iter(next(iter(resp["answer"].values()), {}).values()), None)
             if value is not None:
-                st.metric("Eligible patients", str(value))
+                st.markdown(f'<div class="result-card"><div class="k">Eligible patients</div><div class="v">{_escape(value)}</div>'
+                            '<div class="d">Distinct patients matching your definition, after opt-outs and the small-cell rule.</div></div>',
+                            unsafe_allow_html=True)
     show_response(resp)
     request = st.session_state.get("requests", {}).get(resp["request_id"]) or {}
     if isinstance(request.get("criteria"), dict):

@@ -16,8 +16,7 @@ from .viz import DIMENSION_LABELS, answer_table
 
 TIME_DIMENSION = "Year"
 SUPPRESSED = {"<10", "suppressed", f"<{SMALL_CELL_THRESHOLD}"}
-PALETTE = ["#2F56D8", "#FF7A6B", "#9A8CF2", "#0E2554", "#2BB596", "#C9A227", "#3BA7D9", "#7A4F2A", "#5C6690", "#B9B0F5"]
-FIXED_COLOURS = {"female": "#FF7A6B", "male": "#2F56D8"}
+from .theme import CHART_PALETTE as PALETTE, CHART_TEXT, FIXED_COLOURS
 REFUSED_TYPES = {
     "pie": "a pie chart hides small differences and cannot show time or more than a handful of groups",
     "donut": "a donut chart hides small differences and cannot show time or more than a handful of groups",
@@ -214,12 +213,13 @@ def altair_chart(plan):
             encodings["xOffset"] = alt.XOffset(f"{colour}:N", sort=domain)
     released = data[data["value"].notna()]
     base = alt.Chart(released).encode(**encodings)
+    single = {} if colour else {"color": PALETTE[0]}
     if plan["chart_type"] == "line":
-        chart = base.mark_line(point=alt.OverlayMarkDef(size=70, filled=True), strokeWidth=2.5)
+        chart = base.mark_line(point=alt.OverlayMarkDef(size=70, filled=True, **single), strokeWidth=2.5, **single)
         if colour:
             encodings["detail"] = alt.Detail(f"{colour}:N")
     else:
-        chart = base.mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        chart = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, **single)
     hidden = data[data["value"].isna()].copy()
     layers = [chart]
     if not hidden.empty:
@@ -232,10 +232,13 @@ def altair_chart(plan):
             marker_enc["color"] = alt.Color(f"{colour}:N", scale=alt.Scale(domain=list(plan["colors"]), range=list(plan["colors"].values())), legend=None)
         layers.append(alt.Chart(hidden).mark_text(dy=-8, fontSize=11, fontWeight="bold").encode(**marker_enc))
     figure = alt.layer(*layers).properties(title=alt.TitleParams(plan["title"], anchor="start", fontSize=16,
-                                                                 color="#0E2554"), height=360)
-    return figure.configure_axis(grid=True, gridOpacity=0.25, labelColor="#22305A", titleColor="#0E2554",
-                                 labelFontSize=12, titleFontSize=12).configure_view(strokeOpacity=0).configure_legend(
-        labelColor="#22305A", titleColor="#0E2554")
+                                                                 color=CHART_TEXT["title"]), height=360,
+                                           background="white", padding={"left": 8, "right": 8, "top": 8, "bottom": 8})
+    return figure.configure_axis(grid=True, gridColor=CHART_TEXT["grid"], gridOpacity=1, domainColor=CHART_TEXT["grid"],
+                                 tickColor=CHART_TEXT["grid"], labelColor=CHART_TEXT["label"],
+                                 titleColor=CHART_TEXT["title"], labelFontSize=12, titleFontSize=12
+                                 ).configure_view(strokeOpacity=0).configure_legend(
+        labelColor=CHART_TEXT["label"], titleColor=CHART_TEXT["title"])
 
 
 def display_table(plan):
