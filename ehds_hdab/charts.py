@@ -118,7 +118,8 @@ def build_plan(resp, population_text, period_text, overrides=None):
         metric_label = ("patients" if measure_type == "count_patients" else series_name)
         metric_options = list(series)
     else:
-        preferred = next((m for m in metrics if (info.get(m) or {}).get("type") == "percentage"), metrics[0])
+        preferred = next((m for kind in ("percentage", "mean", "count_encounters") for m in metrics
+                          if (info.get(m) or {}).get("type") == kind), metrics[0])
         metric_label = overrides.get("metric") if overrides.get("metric") in metrics else preferred
         measure_type = (info.get(metric_label) or {}).get("type", "count_patients")
         x = overrides.get("x") if overrides.get("x") in dims else (TIME_DIMENSION if x_is_time else (dims[0] if dims else None))
