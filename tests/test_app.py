@@ -179,12 +179,12 @@ def test_advanced_example_request_and_chart():
     assert not at.exception
     assert at.session_state["stage"] == "result"
     assert any("APPROVE_STATISTICAL" in s.value for s in at.success)
-    chart_input = next(widget for widget in at.text_input if widget.label == "Describe the chart you want")
+    chart_input = next(widget for widget in at.text_input if widget.label == "Refine the chart in your own words")
     chart_input.set_value("bar chart of prevalence by region")
     at.run()
     assert not at.exception
     assert any(button.label == "Download chart (PNG)" for button in at.get("download_button"))
-    chart_input = next(widget for widget in at.text_input if widget.label == "Describe the chart you want")
+    chart_input = next(widget for widget in at.text_input if widget.label == "Refine the chart in your own words")
     chart_input.set_value("histogram of HbA1c")
     at.run()
     assert any("secure processing environment" in element.value for element in at.info)

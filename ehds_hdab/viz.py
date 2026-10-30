@@ -33,6 +33,10 @@ _REFUSED_CHART = re.compile(
 _REFUSED_MONTHLY = re.compile(r"\bmonthly\b|\bper\s+month\b|\bby\s+month\b|\bmonths?\b", re.I)
 _TIME_CUE = re.compile(r"\bover\s+time\b|\btrends?\b|\byearly\b|\bannual(?:ly)?\b|\bper\s+year\b|"
                        r"\bby\s+year\b|\beach\s+year\b|\btime\s+series\b", re.I)
+_TABLE_CUE = re.compile(r"\b(?:as\s+a\s+table|show\s+(?:a\s+|the\s+)?table|table\s+instead|in\s+a\s+table)\b", re.I)
+_AGE_FILTER = re.compile(r"\b(?:aged?|ages?)\s+(\d{1,3})\s*(?:-|–|to)\s*(\d{1,3})\b|\b(?:aged?|over|older\s+than)\s+(\d{1,3})\s*\+?\b", re.I)
+_PERCENT_CUE = re.compile(r"\bpercent(?:age)?s?\b|\bproportions?\b|\bshares?\b|%", re.I)
+_REFUSED_TYPE = re.compile(r"\b(pie|donut|area|3d)\b", re.I)
 _HELP_MESSAGE = (
     "Try a bar chart of patients by sex, a line graph of mean HbA1c by age band, "
     "group the results by region, or show the results by year as a line graph."
@@ -150,16 +154,42 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
     chart_type = current.get("type") if current.get("type") in {"bar", "line"} else "bar"
     spec = {"type": chart_type, "metric": metric, "x": x, "color": color}
 
+    extras = {"table": False, "filter": None, "prefer": None, "refused_type": None}
+    if _TABLE_CUE.search(command):
+        return {"ok": True, "message": "", "spec": spec, "regroup": None, **extras, "table": True}
+    age = _AGE_FILTER.search(command)
+    if age and re.search(r"\b(?:only|restrict|limit|just)\b", command, re.I):
+        low, high, single = age.group(1), age.group(2), age.group(3)
+        item = ({"type": "age", "label": "age", "min": int(low), "max": int(high)} if low
+                else {"type": "age", "label": "age", "min": int(single)})
+        return {"ok": True, "message": "Re-running the request with the new age filter through the approval process.",
+                "spec": spec, "regroup": None, **extras, "filter": item}
+    if _PERCENT_CUE.search(command) and "percentage" not in command.casefold().split("chart")[0] or re.search(
+            r"\b(?:percentages?|proportions?)\s+instead\b", command, re.I):
+        percentage = next((m for m in metrics if re.search(r"%|prevalence|percentage|share", str(m), re.I)), None)
+        if percentage:
+            spec["metric"] = percentage
+            return {"ok": True, "message": "", "spec": spec, "regroup": None, **extras, "prefer": "percentage"}
+        return {"ok": False, "message": ("Percentages are not part of this result. Ask a question that names a "
+                                         "prevalence or share (e.g. 'prevalence of type 2 diabetes by region') so the "
+                                         "percentage is calculated and privacy-checked by the engine."),
+                "spec": spec, "regroup": None, **extras}
+    refused_type = _REFUSED_TYPE.search(command)
+    if refused_type:
+        return {"ok": True, "message": "", "spec": spec, "regroup": None, **extras,
+                "refused_type": refused_type.group(1).casefold()}
     if _REFUSED_CHART.search(command):
         return {
             "ok": False,
             "message": (
                 "Not available: this chart needs individual patients' values, "
                 "which only approved users may analyse inside the secure "
-                "processing environment."
+                "processing environment. Ask for the 'distribution of BMI' to get counts per clinical category, "
+                "or the 'relationship between BMI and HbA1c' for mean values per category."
             ),
             "spec": spec,
             "regroup": None,
+            **extras,
         }
     if _REFUSED_MONTHLY.search(command):
         return {
@@ -168,6 +198,7 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
                        "available in this prototype. Try 'show this by year as a line graph'.",
             "spec": spec,
             "regroup": None,
+            **extras,
         }
 
     recognized = False
@@ -211,6 +242,7 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
                 ),
                 "spec": spec,
                 "regroup": requested,
+                **extras,
             }
 
     if not recognized:
@@ -219,8 +251,9 @@ def interpret_chart_command(text, current_spec, metric_columns, dimension_column
             "message": _HELP_MESSAGE,
             "spec": spec,
             "regroup": None,
+            **extras,
         }
-    return {"ok": True, "message": "", "spec": spec, "regroup": None}
+    return {"ok": True, "message": "", "spec": spec, "regroup": None, **extras}
 
 
 def plotted_data(table, spec):

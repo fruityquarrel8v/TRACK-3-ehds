@@ -16,6 +16,7 @@ from ehds_hdab.criteria import criteria_to_definitions, describe_criteria
 from ehds_hdab.data import load_data
 from ehds_hdab.providers import interpret as interpret_question
 from ehds_hdab.pipeline import process_request
+from ehds_hdab.charts import build_plan, altair_chart, display_table, png_table_and_spec, select_chart_type
 from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
 from ehds_hdab import disclosure
 from ehds_hdab.viz import answer_table, interpret_chart_command, methodology_text, render_chart
@@ -153,94 +154,181 @@ def show_response(resp, staff=False):
             st.json(resp.get("query_plan") or {})
 
 
-def _regroup(resp, result):
+def _derived_request(resp, result):
+    """Copy of the original request with a new grouping and/or an extra filter; goes through the full pipeline."""
     request = st.session_state.get("requests", {}).get(resp["request_id"])
     if not request or not isinstance(request.get("criteria"), dict):
-        st.info("Regrouping is available for requests made with the cohort builder or the research question box.")
-        return
-    regrouped = copy.deepcopy(request)
-    existing_years = next((d for d in request["criteria"].get("group_by", []) or []
-                           if isinstance(d, dict) and d.get("dimension") == "year"), None)
-    regrouped["criteria"]["group_by"] = [
-        {"dimension": "age_band", "bands": _age_bands("10-year bands", "")} if dimension == "age_band"
-        else (existing_years or {"dimension": "year"}) if dimension == "year"
-        else {"dimension": dimension}
-        for dimension in result["regroup"]
-    ]
+        st.info("Regrouping and filtering are available for requests made with the research question box or the "
+                "guided builder.")
+        return None
+    derived = copy.deepcopy(request)
+    if result.get("regroup"):
+        existing_years = next((d for d in request["criteria"].get("group_by", []) or []
+                               if isinstance(d, dict) and d.get("dimension") == "year"), None)
+        derived["criteria"]["group_by"] = [
+            {"dimension": "age_band", "bands": _age_bands("10-year bands", "")} if dimension == "age_band"
+            else (existing_years or {"dimension": "year"}) if dimension == "year"
+            else {"dimension": dimension}
+            for dimension in result["regroup"]
+        ]
+    if result.get("filter"):
+        population = derived["criteria"].setdefault("population", {"match": "all", "items": []})
+        if str(population.get("match", "all")).casefold() == "any" and len(population.get("items", [])) > 1:
+            population["items"] = [{"type": "group", "match": "any", "items": population["items"]}]
+            population["match"] = "all"
+        population["items"] = [item for item in population.get("items", []) if item.get("type") != "age"]
+        population["items"].append(dict(result["filter"]))
     number = st.session_state.get("regroup_number", 0) + 1
     st.session_state["regroup_number"] = number
-    regrouped["id"] = f"{str(resp['request_id']).split('-G')[0]}-G{number}"
+    derived["id"] = f"{str(resp['request_id']).split('-G')[0]}-G{number}"
+    derived["parent_id"] = str(resp["request_id"]).split("-G")[0]
+    return derived
+
+
+def _regroup(resp, result):
+    derived = _derived_request(resp, result)
+    if derived is None:
+        return
     with st.spinner("Re-running the request through the approval process..."):
-        new_resp = process_request(regrouped)
-    store(new_resp, regrouped)
+        new_resp = process_request(derived)
+    store(new_resp, derived)
     st.session_state["last"] = new_resp["request_id"]
-    st.session_state.setdefault("chart_specs", {})[new_resp["request_id"]] = result["spec"]
+    st.session_state.setdefault("chart_specs", {})[new_resp["request_id"]] = dict(result.get("spec") or {})
     st.rerun()
+
+
+CHART_TYPE_LABELS = {"line": "Line graph", "bar": "Bar chart"}
+COMPARE_OPTIONS = {"Year": "year", "Sex": "sex", "Age band": "age_band", "Region": "region", "Hospital": "data_holder"}
 
 
 def _chart_section(resp):
     rid = resp["request_id"]
-    plan = resp.get("query_plan") or {}
-    group_by = plan.get("group_by", [])
-    table = answer_table(resp["answer"], group_by)
+    request = st.session_state.get("requests", {}).get(rid) or {}
+    criteria = request.get("criteria") if isinstance(request.get("criteria"), dict) else None
+    population_text = describe_criteria(criteria) if criteria else str(request.get("question") or rid)
+    period_text = _criteria_period_summary(criteria) if criteria else "As defined in the request"
+    specs = st.session_state.setdefault("chart_specs", {})
+    overrides = dict(specs.get(rid) or {})
+    group_by = (resp.get("query_plan") or {}).get("group_by", [])
     dims = [DIM_LABELS.get(d.get("dimension"), d.get("dimension")) for d in group_by]
-    metrics = [c for c in table.columns if c not in dims]
-    if table.empty or not metrics:
+    plan = build_plan(resp, population_text, period_text, overrides)
+    if plan is None:
         return
     st.markdown("**Visualise these results**")
-    st.caption("Charts are drawn only from the anonymised table above, so they are privacy-safe to export.")
-    specs = st.session_state.setdefault("chart_specs", {})
-    has_year = "Year" in dims
-    default_x = "Year" if has_year else (dims[0] if dims else None)
-    default_color = next((d for d in dims if d != default_x), None) if has_year else None
-    spec = specs.get(rid) or {"type": "line" if has_year else "bar", "metric": metrics[0],
-                              "x": default_x, "color": default_color}
-    if has_year:
-        examples = [f"Line graph of {metrics[0]} by year", "Change this into a bar chart",
-                    "Group the results by year and sex"]
-    elif dims:
-        examples = [f"Bar chart of {metrics[0]} by {dims[0]}", "Show this by year as a line graph",
-                    "Group the results by sex and age"]
+    st.caption("Charts are drawn only from the anonymised, privacy-checked table above. Changing the grouping or a "
+               "filter re-runs the request through the same approval and disclosure checks.")
+    single_number = not dims and not plan["category_axis"]
+    if single_number:
+        st.caption("A single number is not charted. Ask for a trend by year or a comparison by sex, age, region or "
+                   "hospital to get a chart.")
     else:
-        examples = ["Show this by year as a line graph", "Compare by sex", "Compare by region"]
-    command = st.text_input("Describe the chart you want", key=f"chart_cmd_{rid}", placeholder=examples[0])
+        c1, c2, c3, c4 = st.columns([1.1, 1.8, 1.4, 0.9])
+        type_key = f"chart_type_{rid}"
+        if overrides.pop("pending_sync", False):
+            # A typed command changed the chart on the previous run; widgets may only be updated before rendering.
+            specs[rid] = overrides
+            if overrides.get("type") in plan["allowed_types"]:
+                st.session_state[type_key] = overrides["type"]
+            if overrides.get("metric") in plan["metric_options"]:
+                st.session_state[f"chart_metric_{rid}"] = overrides["metric"]
+            if overrides.get("table") is not None:
+                st.session_state[f"chart_table_{rid}"] = bool(overrides.pop("table"))
+        if st.session_state.get(type_key) not in plan["allowed_types"]:
+            st.session_state[type_key] = plan["chart_type"]
+        chart_type = c1.selectbox("Chart type", plan["allowed_types"], key=type_key,
+                                  format_func=lambda t: CHART_TYPE_LABELS.get(t, t))
+        metric_key = f"chart_metric_{rid}"
+        if st.session_state.get(metric_key) not in plan["metric_options"]:
+            st.session_state[metric_key] = plan["metric"]
+        metric = c2.selectbox("Measure", plan["metric_options"], key=metric_key) if len(plan["metric_options"]) > 1 \
+            else plan["metric"]
+        compare_choices = ["No change"] + [label for label in COMPARE_OPTIONS if label not in dims]
+        compare = c3.selectbox("Add a comparison", compare_choices, key=f"chart_compare_{rid}")
+        show_table = c4.toggle("Table", key=f"chart_table_{rid}")
+        if compare != "No change":
+            st.session_state[f"chart_compare_{rid}"] = "No change"
+            _regroup(resp, {"regroup": [COMPARE_OPTIONS[d] for d in dims if d in COMPARE_OPTIONS] + [COMPARE_OPTIONS[compare]],
+                            "spec": {"type": chart_type, "metric": metric}})
+        if chart_type != plan["chart_type"] or metric != plan["metric"]:
+            overrides.update({"type": chart_type, "metric": metric})
+            specs[rid] = overrides
+            plan = build_plan(resp, population_text, period_text, overrides)
+    examples = (["Show this by year as a line graph", "Compare by sex", "Compare by region"] if single_number
+                else ([f"Line graph of {plan['metric']} by year", "Change this into a bar chart", "Show a table instead"]
+                      if plan["time_axis"] else
+                      [f"Bar chart of {plan['metric']} by {plan['x_label']}", "Show this by year as a line graph",
+                       "Only patients aged 40-65"]))
+    command = st.text_input("Refine the chart in your own words", key=f"chart_cmd_{rid}", placeholder=examples[0])
     chosen = None
     for i, (col, example) in enumerate(zip(st.columns(3), examples)):
         if col.button(example, key=f"chart_ex_{rid}_{i}"):
             chosen = example
     command = chosen or command
     message = ""
+    if command and command == overrides.get("handled") and not chosen:
+        command = ""  # already applied on a previous run; the text box still shows it
     if command:
-        result = interpret_chart_command(command, spec, metrics, dims)
-        if result["regroup"]:
+        overrides["handled"] = command
+        specs[rid] = overrides
+        result = interpret_chart_command(command, {"type": plan["chart_type"], "metric": plan["metric"],
+                                                   "x": plan["x"], "color": plan["color"]},
+                                         plan["metric_options"], dims)
+        if result.get("regroup") or result.get("filter"):
             _regroup(resp, result)
             return
-        if result["ok"]:
-            spec = result["spec"]
-            specs[rid] = spec
+        if result.get("table"):
+            overrides.update({"table": True, "pending_sync": True})
+            specs[rid] = overrides
+            st.rerun()
+        elif result.get("refused_type"):
+            _, _, message = select_chart_type(plan["time_axis"], plan["category_axis"], result["refused_type"])
+        elif result["ok"]:
+            wanted = result["spec"]
+            new_type, _, note = select_chart_type(plan["time_axis"], plan["category_axis"], wanted.get("type"))
+            overrides.update({"type": new_type, "metric": wanted.get("metric") or plan["metric"],
+                              "pending_sync": True, "note": note})
+            specs[rid] = overrides
+            st.rerun()
         else:
             message = result["message"]
+    if overrides.get("note") and not message:
+        message = overrides.pop("note")
+        specs[rid] = overrides
+    if plan.get("selection_note") and not message:
+        message = plan["selection_note"]
     if message:
         st.info(message)
-    if not dims:
-        st.caption("A single number is not charted. Ask for a comparison (by sex, age, region, hospital) or a "
-                   "trend by year to get a chart.")
+    if single_number:
         return
-    request = st.session_state.get("requests", {}).get(rid) or {}
-    criteria = request.get("criteria") if isinstance(request.get("criteria"), dict) else None
-    population_text = describe_criteria(criteria) if criteria else str(request.get("question") or rid)
-    period_text = _criteria_period_summary(criteria) if criteria else "As defined in the request"
-    title = f"{spec['metric']} by {spec['x']}" if spec.get("x") else str(spec["metric"])
-    if spec.get("color"):
-        title += f" and {spec['color']}"
-    fig, png = render_chart(table, spec, title, population_text, period_text, "")
-    st.pyplot(fig)
+    if show_table if not single_number else False:
+        st.dataframe(display_table(plan), hide_index=True, width="stretch")
+    else:
+        st.altair_chart(altair_chart(plan), width="stretch")
+    st.caption(plan["explanation"])
+    with st.expander("Data behind this chart"):
+        st.dataframe(display_table(plan), hide_index=True, width="stretch")
+        st.caption(plan["privacy"])
     with st.expander("Statistical methodology and definitions"):
-        st.write(methodology_text(spec, resp))
+        st.write(f"**Measure:** {plan['measure_text']}" + (f" ({plan['unit']})" if plan["unit"] else ""))
         st.write(f"**Population:** {population_text}")
         st.write(f"**Time period:** {period_text}")
-    st.download_button("Download chart (PNG)", png, file_name=f"{rid}_chart.png", mime="image/png",
-                       key=f"chart_png_{rid}")
+        st.write(methodology_text({"type": plan["chart_type"], "metric": plan["metric"]}, resp))
+    frame, spec = png_table_and_spec(plan)
+    try:
+        _, png = render_chart(frame, spec, plan["title"], population_text, period_text, "")
+        st.download_button("Download chart (PNG)", png, file_name=f"{rid}_chart.png", mime="image/png",
+                           key=f"chart_png_{rid}")
+    except ValueError:
+        pass
+    b1, b2 = st.columns([1, 3])
+    if b1.button("Restore original chart", key=f"chart_restore_{rid}"):
+        specs.pop(rid, None)
+        for key in (f"chart_type_{rid}", f"chart_metric_{rid}", f"chart_table_{rid}", f"chart_cmd_{rid}"):
+            st.session_state.pop(key, None)
+        parent = request.get("parent_id")
+        if parent and parent in st.session_state.get("decisions", {}):
+            st.session_state["last"] = parent
+        st.rerun()
 
 
 def _builder_concepts(data, kind, table=None):

@@ -2,6 +2,8 @@ from datetime import date
 import math
 import re
 
+from .bins import bins_for
+
 from .plan import QueryPlan
 
 
@@ -69,17 +71,17 @@ def _valid_values(value):
 
 def _default_years(criteria):
     """Years for a 'year' grouping: the request's own period if it names one, else DEFAULT_YEARS."""
-    years = []
+    starts, ends = [], []
 
     def visit(item):
         if not isinstance(item, dict):
             return
         for child in item.get("items", []) or []:
             visit(child)
-        for key in ("period_start", "onset_start", "period_end", "onset_end"):
+        for key, bucket in (("period_start", starts), ("onset_start", starts), ("period_end", ends), ("onset_end", ends)):
             value = item.get(key)
             if isinstance(value, str) and re.match(r"\d{4}", value):
-                years.append(int(value[:4]))
+                bucket.append(int(value[:4]))
 
     population = criteria.get("population")
     if isinstance(population, dict):
@@ -87,8 +89,8 @@ def _default_years(criteria):
             visit(item)
     for metric in criteria.get("metrics", []) or []:
         visit(metric)
-    if years:
-        return min(years), max(years)
+    if starts or ends:
+        return (min(starts) if starts else min(ends)), (max(ends) if ends else DEFAULT_YEARS[1])
     return DEFAULT_YEARS
 
 
@@ -370,6 +372,60 @@ def plan_from_criteria(criteria) -> QueryPlan:
                     "type": "count_patients",
                     "population": list(plan.cohort),
                 })
+            elif kind == "percentage":
+                # Share of the non-clinical base population (same age/sex/region filters, without the
+                # condition/medication/lab/stay criteria) that meets all criteria. Used for prevalence.
+                denominator = [entry for entry in plan.cohort if not _is_clinical(entry, plan)]
+                plan.metrics.append({
+                    "id": metric_id,
+                    "label": label,
+                    "type": "percentage",
+                    "numerator_population": list(plan.cohort),
+                    "denominator_population": denominator,
+                })
+            elif kind == "count_encounters":
+                codes = _codes(metric.get("icd10"))
+                start, end = _date_range(metric, "period_start", "period_end")
+                if (start is None and metric.get("period_start") not in (None, "")
+                        or end is None and metric.get("period_end") not in (None, "")):
+                    warning({"label": label})
+                    continue
+                counter += 1
+                encounter_key = f"c{counter}_{_slug(label)}_stays"
+                encounter_spec = {"kind": "encounter", "types": list(metric.get("types") or ["inpatient"])}
+                if codes:
+                    encounter_spec["primary_icd10_prefixes"] = codes
+                if start:
+                    encounter_spec["start_start"] = start
+                if end:
+                    encounter_spec["start_end"] = end
+                plan.concepts[encounter_key] = encounter_spec
+                plan.metrics.append({
+                    "id": metric_id,
+                    "label": label,
+                    "type": "count_encounters",
+                    "encounter": encounter_key,
+                    "population": list(plan.cohort),
+                })
+            elif kind == "distribution":
+                # Patient counts per clinical category of a measurement (latest value per patient).
+                raw_loinc = metric.get("loinc")
+                loinc = raw_loinc.strip() if isinstance(raw_loinc, str) else ""
+                bins = metric.get("bins") or bins_for(loinc)
+                start, end = _date_range(metric, "period_start", "period_end")
+                if not loinc or not bins:
+                    warning({"label": label})
+                    continue
+                for bin_index, band in enumerate(bins, start=1):
+                    counter, bin_population = _bin_population(plan, counter, loinc, band, start, end, label)
+                    plan.metrics.append({
+                        "id": f"{metric_id}_b{bin_index}",
+                        "label": f"{label}: {band['label']}",
+                        "type": "count_patients",
+                        "population": bin_population,
+                        "category": band["label"],
+                        "series": label,
+                    })
             elif kind == "mean_latest_lab":
                 raw_loinc = metric.get("loinc")
                 loinc = raw_loinc.strip() if isinstance(raw_loinc, str) else ""
@@ -391,6 +447,27 @@ def plan_from_criteria(criteria) -> QueryPlan:
                 if end:
                     observation_spec["date_end"] = end
                 plan.concepts[observation_key] = observation_spec
+                stratify = metric.get("stratify") if isinstance(metric.get("stratify"), dict) else None
+                if stratify:
+                    # Mean of one measurement within clinical categories of another (aggregated relationship).
+                    by_loinc = str(stratify.get("loinc") or "").strip()
+                    bins = stratify.get("bins") or bins_for(by_loinc)
+                    if not by_loinc or not bins:
+                        warning({"label": label})
+                        continue
+                    by_label = str(stratify.get("label") or by_loinc)
+                    for bin_index, band in enumerate(bins, start=1):
+                        counter, bin_population = _bin_population(plan, counter, by_loinc, band, start, end, by_label)
+                        plan.metrics.append({
+                            "id": f"{metric_id}_b{bin_index}",
+                            "label": f"{label} | {by_label} {band['label']}",
+                            "type": "mean",
+                            "observation": observation_key,
+                            "population": [*bin_population, {"concept": observation_key, "negate": False}],
+                            "category": band["label"],
+                            "series": label,
+                        })
+                    continue
                 plan.metrics.append({
                     "id": metric_id,
                     "label": label,
@@ -408,6 +485,34 @@ def plan_from_criteria(criteria) -> QueryPlan:
                 "population": list(plan.cohort),
             })
     return plan
+
+
+_CLINICAL_KINDS = {"condition", "medication", "observation", "encounter"}
+
+
+def _is_clinical(entry, plan):
+    spec = plan.concepts.get(entry.get("concept"), {})
+    if spec.get("kind") == "group":
+        return any(_is_clinical(child, plan) for child in spec.get("items", []))
+    return spec.get("kind") in _CLINICAL_KINDS
+
+
+def _bin_population(plan, counter, loinc, band, start, end, label):
+    """Cohort entries restricting the latest value of `loinc` (within the window) to [lo, hi)."""
+    population = list(plan.cohort)
+    for operator, bound in ((">=", band.get("lo")), ("<", band.get("hi"))):
+        if bound is None:
+            continue
+        counter += 1
+        key = f"c{counter}_{_slug(label)}_{_slug(band['label'])}_{'lo' if operator == '>=' else 'hi'}"
+        spec = {"kind": "observation", "loinc": loinc, "pick": "latest", "op": operator, "value": float(bound)}
+        if start:
+            spec["date_start"] = start
+        if end:
+            spec["date_end"] = end
+        plan.concepts[key] = spec
+        population.append({"concept": key, "negate": False})
+    return counter, population
 
 
 def _codes_text(codes):

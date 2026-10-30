@@ -8,7 +8,8 @@ from .terminology import Concept, display_name, entries
 _STOPWORDS = {
     "a", "about", "above", "across", "active", "admitted", "admission",
     "admissions", "adult", "adults", "after", "aged", "and", "any", "are",
-    "as", "at", "average", "band", "bands", "below", "between", "by",
+    "as", "at", "average", "band", "bands", "below", "between", "by", "changes", "changed", "occurred", "occur",
+    "evolution", "development", "pattern", "patterns", "longitudinal",
     "among", "cases", "children", "compare", "compared", "comparison",
     "condition", "conditions", "count", "distribution", "during", "each",
     "every", "ever", "exclude", "female", "females",
@@ -273,6 +274,8 @@ def _is_lab_outcome(text, start, end):
     after = text[end:min(len(text), end + 60)].casefold()
     if re.search(r"\b(?:mean|average|compare|distribution|trends?\s+(?:in|of))\b", before):
         return True
+    if re.search(r"\b(?:relationship|association|correlation|relation)\s+between\b", before):
+        return True
     return bool(re.match(r"\s*(?:levels?|values?|distribution|trends?)\b", after))
 
 
@@ -369,6 +372,106 @@ YEARLY_ASSUMPTION = (
     "status as of 31 December of each year, the latest laboratory value within each year, hospital stays "
     "within each year; age as of 31 December 2025."
 )
+
+
+_PREVALENCE = re.compile(r"\bprevalen(?:ce|t)\b|\bproportion\s+of\b|\bpercentage\s+of\b|\bshare\s+of\b", re.I)
+_INCIDENCE = re.compile(r"\bincidence\b|\bnew\s+cases\b|\bnewly\s+(?:diagnosed|recorded)\b", re.I)
+_STAYS_COUNTED = re.compile(r"\b(?:hospitali[sz]ations?|admissions?|inpatient\s+stays?|hospital\s+stays?)\b", re.I)
+_DISTRIBUTION = re.compile(r"\bdistribution\s+of\b|\bhistogram\s+of\b", re.I)
+_RELATIONSHIP = re.compile(r"\b(?:relationship|association|correlation|relation)\s+between\b", re.I)
+
+
+def _measure_metrics(text, nodes, metrics, assumptions, periods):
+    """Turn measure words (prevalence, hospitalisations, distribution, relationship) into explicit,
+    clinically labelled metrics. Returns (metrics, recognised_spans)."""
+    spans = []
+    leaves = [node["item"] for node in nodes if node.get("item")]
+    conditions = [item for item in leaves if item.get("type") == "condition" and not item.get("exclude")]
+    labs = [node for node in nodes if node.get("kind") == "lab_outcome"]
+    period = periods[0][2] if periods else None
+
+    match = _PREVALENCE.search(text)
+    if match and conditions:
+        spans.append(match.span())
+        names = " and ".join(item["label"] for item in conditions)
+        metrics = [m for m in metrics if m.get("type") != "count_patients"]
+        metrics.insert(0, {"type": "count_patients", "label": f"patients with {names}"})
+        metrics.insert(1, {"type": "percentage", "label": f"prevalence of {names} (%)"})
+        assumptions.append(
+            f"Prevalence = patients with a recorded diagnosis of {names} (by the end of the period or year) divided "
+            "by all registered, non-opted-out patients with the same age/sex/region filters. The data have no "
+            "registration dates, so the base population is the same in every year."
+        )
+    match = _INCIDENCE.search(text)
+    if match and conditions:
+        spans.append(match.span())
+        assumptions.append(
+            "Counted as newly recorded diagnoses (onset date within the period or year). The data record a diagnosis "
+            "onset date, not the date of first clinical presentation; this is an incidence proxy, not true incidence."
+        )
+    match = _STAYS_COUNTED.search(text)
+    if match and not _HOSPITALISED_FOR.search(text):
+        stays = [item for item in leaves if item.get("type") == "hospital_stay"]
+        codes = []
+        label = "inpatient stays"
+        if stays:
+            codes, label = list(stays[0].get("icd10") or []), f"inpatient stays for {stays[0]['label']}"
+        elif conditions:
+            codes, label = list(conditions[0].get("icd10") or []), f"inpatient stays for {conditions[0]['label']}"
+        if stays or conditions:
+            spans.append(match.span())
+            metric = {"type": "count_encounters", "label": label, "icd10": codes}
+            if period:
+                metric.update(_period_fields(*period))
+            metrics.insert(0, metric)
+            metrics = [m for m in metrics if m.get("type") != "count_patients"] + [
+                {"type": "count_patients", "label": "patients hospitalised"}]
+            if conditions and not stays:
+                for node in nodes:
+                    item = node.get("item")
+                    if item is conditions[0]:
+                        node["item"] = {"type": "hospital_stay", "label": item["label"], "icd10": list(item["icd10"]),
+                                        **_period_fields(*(period or (None, None)))}
+            assumptions.append(
+                f"'{label.capitalize()}' counts inpatient stays whose main diagnosis matches; a patient with several "
+                "stays is counted once per stay. 'Patients hospitalised' counts each patient once. Emergency and "
+                "outpatient visits are not counted."
+            )
+    match = _DISTRIBUTION.search(text)
+    if match and labs:
+        spans.append(match.span())
+        lab = labs[0]["metric"]
+        unit = _data_unit(lab["loinc"])
+        name = re.sub(r"^mean latest ", "", lab["label"]).split(" (")[0]
+        metric = {"type": "distribution", "label": f"{name} category" + (f" ({unit})" if unit else ""),
+                  "loinc": lab["loinc"]}
+        if period:
+            metric.update(_period_fields(*period))
+        metrics = [m for m in metrics if m is not lab] + [metric]
+        assumptions.pop() if assumptions and assumptions[-1].startswith("Compared as the mean") else None
+        assumptions.append(
+            f"Distribution shown as the number of patients per clinical {name} category, using each patient's latest "
+            f"{name} value (within the period if given). Individual values are never shown."
+        )
+    match = _RELATIONSHIP.search(text)
+    if match and len(labs) >= 2:
+        spans.append(match.span())
+        outcome, by = labs[1]["metric"], labs[0]["metric"]
+        by_name = re.sub(r"^mean latest ", "", by["label"]).split(" (")[0]
+        metrics = [m for m in metrics if m is not outcome and m is not by]
+        stratified = dict(outcome)
+        stratified["stratify"] = {"loinc": by["loinc"], "label": by_name}
+        metrics.append(stratified)
+        assumptions[:] = [a for a in assumptions if not a.startswith("Compared as the mean")]
+        assumptions.append(
+            f"Relationship shown as the mean of each patient's latest {re.sub(r'^mean latest ', '', outcome['label'])} "
+            f"within clinical {by_name} categories. This is a descriptive association in aggregate form, not a "
+            "patient-level scatter plot and not evidence of causation."
+        )
+    return metrics, spans
+
+
+_HOSPITALISED_FOR = re.compile(r"\b(?:hospitali[sz]ed|admitted)\s+(?:for|with|because)\b", re.I)
 
 
 def _grouping(text, assumptions):
@@ -706,6 +809,19 @@ def interpret_question(text: str) -> Interpretation:
     group_by = _grouping(text, assumptions)
     if any(item["dimension"] == "year" for item in group_by):
         recognised_spans.extend(match.span() for match in TREND_WORDS.finditer(text))
+        if periods:
+            start, end = periods[0][2]
+            year_group = next(item for item in group_by if item["dimension"] == "year")
+            if start:
+                year_group["from"] = int(str(start)[:4])
+            if end:
+                year_group["to"] = int(str(end)[:4])
+    if any(item["dimension"] == "region" for item in group_by):
+        recognised_spans.extend(m.span() for m in re.finditer(
+            r"\b(?:by\s+region|per\s+region|in\s+each\s+region|across\s+regions)\b", text, re.I))
+    if any(item["dimension"] == "data_holder" for item in group_by):
+        recognised_spans.extend(m.span() for m in re.finditer(
+            r"\b(?:by\s+hospital|per\s+hospital|in\s+each\s+hospital|across\s+hospitals)\b", text, re.I))
     if any(item["dimension"] == "age_band" for item in group_by):
         recognised_spans.extend(
             match.span() for match in re.finditer(
@@ -725,7 +841,21 @@ def interpret_question(text: str) -> Interpretation:
     for node in nodes:
         if node.get("kind") == "lab_outcome":
             metrics.append(node["metric"])
+    metrics, extra_recognised = _measure_metrics(text, nodes, metrics, assumptions, periods)
+    recognised_spans.extend(extra_recognised)
 
+    if (not any(node.get("item") and node["item"].get("type") in _CLINICAL_TYPES for node in nodes)
+            and any(node.get("kind") == "lab_outcome" for node in nodes)):
+        for node in [n for n in nodes if n.get("kind") == "lab_outcome"]:
+            metric = node["metric"]
+            name = re.sub(r"^mean latest ", "", metric["label"]).split(" (")[0]
+            item = {"type": "lab", "label": name, "loinc": metric["loinc"], "op": "present",
+                    **_period_fields(metric.get("period_start"), metric.get("period_end"))}
+            nodes.append({"item": item, "start": node["start"], "end": node["end"], "clinical": True, "kind": "lab"})
+        names = " and ".join(
+            re.sub(r"^mean latest ", "", n["metric"]["label"]).split(" (")[0] for n in nodes if n.get("kind") == "lab_outcome")
+        assumptions.append(f"Population: all registered, non-opted-out patients with at least one {names} measurement"
+                           + (" in the period." if periods else "."))
     population = _make_population_nodes(text, nodes)
     criteria = {
         "population": population,
