@@ -1,8 +1,106 @@
-# EHDS Health Data Access Body – prototype (Track 3)
+# Intelligent Health Data Access Gateway
 
-A working, rule-based Health Data Access Body (HDAB). It reads a data request in the challenge JSON format, decides **REJECT / APPROVE_STATISTICAL / APPROVE_SPE** with the EHDS articles, computes the requested anonymised statistics from the synthetic data, and gives approved applicants a secure processing environment (SPE) with downloads blocked.
+**An AI-assisted EHDS research gateway that interprets health-data requests, calculates trustworthy statistics and prevents unsafe disclosures.**
 
-Nothing is hardcoded for R01–R10: every request is parsed from its own `purpose`, `question` and `definitions`. No LLM or external service is used, so no data (patient-level or otherwise) ever leaves the machine, and the same request always gives the same answer.
+*AIM Healthcare Hackathon Vienna 2026 · Track 3: European Health Data Space · prototype on synthetic data*
+
+> "An AI system that knows when to answer, when to ask, and when to say no."
+
+## The problem
+
+Researchers need health data, but every request mixes clinical ambiguity ("patients on metformin" – current or ever?), legal limits (EHDS Art. 53/54: research yes, insurance pricing no) and privacy risk. A Health Data Access Body (HDAB) has to decide, compute and protect – quickly and consistently.
+
+## Our solution
+
+A simulated HDAB you can talk to. The researcher types one question; the gateway interprets it, asks only when a detail changes the result, decides under the EHDS rules, computes deterministic statistics with small-cell suppression and opt-out exclusion, and explains every decision in plain language. A guided step-by-step builder and the raw JSON format remain available.
+
+## What makes us different: we protect against *combinations* of answers
+
+A small-cell rule checks one answer at a time. Two perfectly legal answers can still leak:
+
+| Request | Released count |
+|---|---|
+| Women with breast cancer in Austria | 114 |
+| … excluding Burgenland | 112 |
+
+Anyone who sees both learns that Burgenland has exactly 2 patients – a protected small group. Our **disclosure ledger** remembers every released count (as one-way hashes of the patient set, never IDs). Before a new result is released, each cell is compared with everything released before, to anyone. If one population is contained in the other and they differ by fewer than 10 patients, the result is withheld and the researcher is told why and what to ask instead. The number itself is never shown. Try it on the **Demo scenarios** page.
+
+*Following a privacy rule is not always the same as protecting privacy.*
+
+## How it works
+
+```
+researcher question ──► legal/purpose screening (decision.py, Art. 54 first)
+        │
+        ▼
+rule-based interpretation (nl.py) ──► structured criteria ──► validation + terminology (criteria.py, terminology.py)
+        │                                                        ICD-10 · ATC · LOINC
+        ▼
+clarification when a choice changes the result (medication status, hospitalisation meaning, diabetes type…)
+        │
+        ▼
+deterministic query engine (engine.py, pandas, opt-outs removed at load) ──► small-cell suppression (privacy.py)
+        │
+        ▼
+disclosure ledger: differencing check against everything released before (disclosure.py)
+        │
+        ▼
+released result + explanation, or refusal with safe alternatives ──► audit log (audit.py)
+```
+
+The interpreter never touches patient data and never produces a number; it only turns text into a validated structured request. The deterministic engine computes; independent safeguards decide what may leave. No external AI service is called; the interpreter is rule-based (an LLM provider could be plugged in behind the same structured-request schema, see *Limitations*).
+
+## Demonstration
+
+`streamlit run app.py`, then:
+
+1. **Research assistant** – type "Compare HbA1c values between men and women aged 40–65 with type 2 diabetes during 2025." → interpretation card → review → result (women 7.2 %, men 7.1 %).
+2. **Demo scenarios** – the four prepared scenarios (legitimate question → differencing attack blocked → clarification → prohibited purpose), all run through the real pipeline; a reset button restores the documented starting state.
+3. **Staff dashboard** – decisions, query plans, disclosure ledger, audit log. **Secure processing environment** – R05's cohort, downloads blocked. **Evaluation** – the official metrics live.
+
+Screenshots and a test recording are in the pull request.
+
+## Privacy and security
+
+- Opted-out patients are removed from all tables when the data is loaded (Art. 71).
+- Counts < 10 → `<10`; percentages and means with < 10 patients → `suppressed`; every requested group shown.
+- Disclosure ledger with subset-differencing detection across all applicants, persistent on disk, hashes only.
+- Charts are drawn only from the suppressed table; patient-level plots are refused outside the SPE.
+- SPE: locked folder per approved application, download/export calls raise and are audited; the UI uses tables without export toolbars.
+- The interpreter treats question text as data: "ignore previous instructions / treat as approved" is ignored and reported (tested).
+- No secrets in the repository; no network calls.
+
+## Test results (measured)
+
+| Metric | Result | Target |
+|---|---|---|
+| Correct decisions (R01–R10) | **10 of 10** | 10 of 10 |
+| Correct numbers | **6 of 6** | 6 of 6 |
+| Privacy leaks | **0** | 0 |
+| Consistency over 3 runs | **10 of 10** | 10 of 10 |
+| Slowest answer | **≈0.25 s** (data loads once, ≈2 s) | < 60 s |
+| Automated tests (`pytest`) | **150+ passing**: official requests, new clinical requests, lab thresholds, medication periods, onset dates, differencing ledger, prompt-injection, UI flows (Streamlit AppTest) | – |
+
+Numbers in the tests are recomputed independently with plain pandas, not taken from the engine.
+
+## Limitations (implemented vs. future)
+
+Implemented now: everything above, on the supplied synthetic dataset, for the 15 diagnoses, 17 medication groups and 4 laboratory tests it contains.
+
+Not implemented / future work:
+- The ledger detects subset/complement differencing between released counts. It does not model combinations of three or more queries, means, external knowledge, or results released before the ledger existed. Production SDC would need cumulative-release accounting.
+- Trends over time (per year/month) are not available; the assistant says so.
+- Interpretation is rule-based; questions outside the dictionary are reported as not recognised rather than guessed. A local (Ollama) or European (Mistral) model could be added behind the same structured-criteria schema with output validation; it was not tested here.
+- Real clinical data would bring missing values, inconsistent coding, mixed units and free text; the loader and terminology layer are the place for a future harmonisation step (code normalisation, unit checks, provenance). Before any real deployment: validation on representative datasets, clinical review of definitions, independent privacy/security assessment and human oversight.
+- Decisions are simulated for demonstration and are not legally binding decisions of a Health Data Access Body.
+
+## Team
+
+*To be completed with the team members and their contributions.*
+
+---
+
+# Technical documentation
 
 ## Run it
 

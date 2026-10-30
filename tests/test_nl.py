@@ -403,3 +403,15 @@ def test_review_flags_unsupported_contradictory_and_injected_questions():
     assert hospital.ok() and hospital.clarifications[0]["id"] == "hospitalisation"
     for q in ["How many adults have type 2 diabetes, by region?", "Patients with COPD not taking a LAMA"]:
         assert interpret_question(q).clarifications == [] and interpret_question(q).problems == []
+
+
+def test_provider_falls_back_to_rules(monkeypatch):
+    from ehds_hdab import providers
+
+    monkeypatch.setenv("EHDS_NL_PROVIDER", "mistral")
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    result = providers.interpret("How many adults have type 2 diabetes, by region?")
+    assert result.ok()
+    assert any("rule-based interpreter was used instead" in a for a in result.assumptions)
+    monkeypatch.setenv("EHDS_NL_PROVIDER", "rules")
+    assert providers.interpret("How many adults have type 2 diabetes, by region?").assumptions == []

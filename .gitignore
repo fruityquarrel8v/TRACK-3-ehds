@@ -4,3 +4,4 @@ spe_workspaces/
 audit_log.jsonl
 evaluation_results.json
 disclosure_ledger.jsonl
+.env

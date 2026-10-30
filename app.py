@@ -14,7 +14,7 @@ import streamlit as st
 from ehds_hdab import config
 from ehds_hdab.criteria import criteria_to_definitions, describe_criteria
 from ehds_hdab.data import load_data
-from ehds_hdab.nl import interpret_question
+from ehds_hdab.providers import interpret as interpret_question
 from ehds_hdab.pipeline import process_request
 from ehds_hdab.spe import DownloadBlockedError, SecureProcessingEnvironment
 from ehds_hdab import disclosure
