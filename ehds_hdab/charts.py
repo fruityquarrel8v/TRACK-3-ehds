@@ -114,7 +114,14 @@ def build_plan(resp, population_text, period_text, overrides=None):
                 rows.append({"Category": category, "value": _numeric(shown), "shown": str(shown),
                              **({colour: row[colour]} if colour else {})})
         data = pd.DataFrame(rows)
-        x, x_label = "Category", series_name
+        first_column = columns[0][0]
+        if " | " in str(first_column):
+            # stratified mean: "<outcome> | <by-variable> <category>" -> x axis is the by-variable
+            by_name = str(first_column).split(" | ", 1)[1].replace(str(columns[0][1]), "").strip()
+            x_label = f"{by_name} category"
+        else:
+            x_label = series_name
+        x = "Category"
         metric_label = ("patients" if measure_type == "count_patients" else series_name)
         metric_options = list(series)
     else:
